@@ -1,17 +1,22 @@
 # OhIc
 
-**Bring old videos back into focus—privately, on your own computer.**
+**Restore, upscale, compare, and stream enhanced video.**
 
-![OhIc local AI video enhancement workspace](public/og.png)
-
-OhIc is a free, open-source video enhancement workspace that runs locally. Import a video from
-your computer or YouTube, choose the detail and output size you want, preview the result, and let
-Real-ESRGAN restore and upscale it frame by frame. OhIc keeps your videos on your machine and
-preserves the source audio in a browser-friendly MP4 result.
+OhIc is a free, open-source video enhancement workspace. Import a file or permitted YouTube video,
+choose the detail and output size, preview the result, and let Real-ESRGAN restore and upscale it
+frame by frame. The final result is a browser-friendly MP4 with source audio when available.
 
 This README is for people using OhIc. If you are installing it for development, changing the
 code, integrating the API, or tuning its configuration, see the
 **[Developer README](DEVELOPER_README.md)**.
+
+## Interface preview
+
+<p align="center">
+  <img src="public/UI1.png" alt="OhIc enhancement workspace showing video playback, resolution targets, quality controls, preview selection, and watch-while-enhancing" width="960">
+</p>
+
+<p align="center"><sub>The enhancement workspace after importing a video.</sub></p>
 
 ## What you can do
 
@@ -38,7 +43,7 @@ code, integrating the API, or tuning its configuration, see the
 - Select and delete saved uploads, YouTube downloads, results, previews, and streaming parts from
   the Storage panel.
 
-## Why OhIc is local-first
+## Privacy and network use
 
 Normal video uploads and AI processing happen on your computer. OhIc has no account system,
 analytics, telemetry, or cloud video-processing service. Its local database contains metadata and
@@ -53,8 +58,8 @@ Use YouTube features only for videos you own or are permitted to download and pr
 
 ## Requirements
 
-- macOS 13 or newer on Apple Silicon is the primary supported experience.
-- Linux can run OhIc with NVIDIA CUDA or CPU processing.
+- macOS 13 or newer and Linux are supported.
+- OhIc uses MPS or CUDA acceleration when available and falls back to CPU processing.
 - Python 3.11 or 3.12, managed through [uv](https://docs.astral.sh/uv/).
 - Node.js 22.13 or newer.
 - FFmpeg, including FFprobe.
@@ -62,8 +67,8 @@ Use YouTube features only for videos you own or are permitted to download and pr
 - Enough free disk space for the imported source, temporary processing data, streaming parts, and
   final result. Long or high-resolution videos can require several times the source file size.
 
-CPU enhancement works, but it can be very slow. Apple Metal or NVIDIA CUDA acceleration is
-strongly recommended for longer videos.
+CPU enhancement works, but it can be very slow. Supported hardware acceleration is strongly
+recommended for longer videos.
 
 ## Install and start
 
@@ -142,17 +147,19 @@ does not delete its local videos; use **Storage** for that.
 
 ## Watch while enhancing
 
-This mode divides the chosen full video or custom range into adaptive parts. The first part is
-shorter so playback can begin sooner; later parts are sized from the source bitrate and duration,
-the output resolution, and the selected quality mode.
+This mode divides the chosen full video or custom range into independently playable parts. The
+first part is the largest and is sized from the source bitrate and duration, output resolution,
+and selected quality mode. After that initial buffer, every later part is at most 20 seconds so
+OhIc can publish the remaining video in small increments.
 
 Each part becomes playable as soon as it finishes. OhIc advances to the next ready part
 automatically. If playback catches up with processing, it pauses at the part boundary and resumes
 when the next part is available. You can leave the viewer and reopen it from **History** without
 losing the rolling buffer. When all parts are ready, OhIc joins them into one downloadable MP4.
 
-This feature removes the need to wait for the entire result, but it cannot make enhancement run in
-real time. A demanding upscale may still reach a part boundary before the next part is ready.
+This design front-loads the main wait and reduces the chance of later pauses. It cannot make
+enhancement run in real time, so a demanding upscale can still reach a part boundary before the
+next part is ready.
 
 ## Track, reopen, and stop work
 
@@ -240,8 +247,8 @@ smaller tiles, but very large frames can still exceed available GPU or unified m
 ### Processing is slower than expected
 
 Real-ESRGAN evaluates every frame. Start with a five-second preview, use the recommended target,
-and choose Fast. CPU processing can be much slower than playback speed; Apple Metal or NVIDIA
-CUDA is preferable.
+and choose Fast. CPU processing can be much slower than playback speed; use supported hardware
+acceleration when available.
 
 ### A result disappeared
 

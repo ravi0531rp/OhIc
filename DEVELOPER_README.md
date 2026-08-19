@@ -39,7 +39,7 @@ OhIc has two local processes:
 The production enhancement model is the official Real-ESRGAN ×2 RRDBNet checkpoint, loaded
 directly through PyTorch. Hardware selection is automatic in this order:
 
-1. Apple Metal Performance Shaders (`mps`)
+1. Metal Performance Shaders (`mps`)
 2. NVIDIA CUDA (`cuda`)
 3. CPU (`cpu`)
 
@@ -83,8 +83,7 @@ OhIc/
 
 ### 1. Choose a supported environment
 
-- **macOS 13+ on Apple Silicon:** primary and hardware-tested path; PyTorch uses MPS when
-  available.
+- **macOS 13+:** supported with PyTorch MPS acceleration when available and CPU fallback.
 - **Linux:** supported for CPU and NVIDIA CUDA development. Install a PyTorch/CUDA combination
   appropriate for the host if the lockfile's resolved wheel is not CUDA-enabled.
 - **Windows:** not a documented native target for the Bash scripts. WSL2 can follow the Linux
@@ -715,13 +714,16 @@ Then:
 
 ```text
 raw_seconds = 120 / sqrt(upscale_work × preset_work × decode_work × duration_work)
-chunk_duration = clamp(round_to_nearest_15_seconds(raw_seconds), 30, 120)
-startup_duration = clamp(chunk_duration / 2, 10, 30)
+initial_chunk_duration = clamp(round_to_nearest_15_seconds(raw_seconds), 30, 120)
+followup_chunk_duration = 20
 ```
 
-The first part uses `startup_duration`; remaining parts use `chunk_duration`, with the final part
-shortened to the selected end. Parts are enhanced sequentially through the normal full pipeline,
-including optional source audio, and stored as:
+The first part uses `initial_chunk_duration`, making it the largest planned part. Every remaining
+part uses `followup_chunk_duration`, with the final part shortened to the selected end. The
+persisted `StreamState.chunk_duration` is the 20-second follow-up maximum; the initial duration is
+represented by the first chunk's timestamps. This front-loads the playback buffer, then publishes
+small increments intended to reduce later boundary waits. Parts are enhanced sequentially through
+the normal full pipeline, including optional source audio, and stored as:
 
 ```text
 data/outputs/<job-id>-chunk-0000.mp4
@@ -890,10 +892,12 @@ frontend must run separately on the host:
 npm run dev
 ```
 
-Docker on macOS does not expose Apple MPS to the Linux container. Native macOS is the recommended
-accelerated path. For a non-local browser origin, set `OHIC_FRONTEND_ORIGIN` on the container and
-set `NEXT_PUBLIC_API_URL` for the frontend. Binding port 8000 to non-loopback interfaces exposes an
-unauthenticated API; apply an appropriate security layer first.
+The backend-only image runs on CPU by default and does not expose host-specific MPS/CUDA
+acceleration automatically. Run the backend natively or provide an explicitly configured GPU
+container runtime when acceleration is required. For a non-local browser origin, set
+`OHIC_FRONTEND_ORIGIN` on the container and `NEXT_PUBLIC_API_URL` for the frontend. Binding port
+8000 to non-loopback interfaces exposes an unauthenticated API; apply an appropriate security
+layer first.
 
 The `.openai/hosting.json` file configures the frontend build workspace only. A static/cloud
 frontend by itself is not a functional OhIc deployment because media processing and managed files
@@ -908,7 +912,7 @@ curl -s http://127.0.0.1:8000/api/health
 ```
 
 Expected top-level status is `ok`. A `degraded` result includes the missing executable and path.
-The same response reports `mps`, `cuda`, or `cpu` and the detected device label.
+The same response reports `mps`, `cuda`, or `cpu` and a device-class label.
 
 ### Port already in use
 
@@ -987,7 +991,8 @@ cd backend
 uv run python -c 'import torch; print("mps", torch.backends.mps.is_available()); print("cuda", torch.cuda.is_available())'
 ```
 
-On macOS, confirm Apple Silicon, a supported macOS/PyTorch combination, and a native arm64 Python.
+On macOS, confirm an MPS-capable system, a supported macOS/PyTorch combination, and a native
+arm64 Python where applicable.
 On Linux, confirm NVIDIA driver, CUDA runtime compatibility, and that the installed PyTorch wheel
 includes CUDA. OhIc deliberately falls back to CPU when neither backend reports available.
 

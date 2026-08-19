@@ -179,7 +179,7 @@ export function SourcePicker({ onLoaded, onPlaylistStarted, onError }: Props) {
           />
           <span className="drop-icon"><UploadIcon size={25} /></span>
           <strong>{busy ? "Inspecting video…" : "Drop your video here"}</strong>
-          <span>{busy ? "Reading resolution, frame rate and codec" : "or click to browse your Mac"}</span>
+          <span>{busy ? "Reading resolution, frame rate and codec" : "or click to browse files"}</span>
           <small>MP4, MOV, MKV, AVI or WebM · up to 20 GB</small>
         </button>
       ) : (
@@ -279,7 +279,6 @@ export function SourcePicker({ onLoaded, onPlaylistStarted, onError }: Props) {
           <p className="legal-note"><ShieldIcon size={15} /> Only process videos you own or are permitted to use.</p>
         </div>
       )}
-      <div className="local-proof"><ShieldIcon size={16} /> Processed locally on your computer <span>No uploads. No tracking.</span></div>
     </section>
   );
 }

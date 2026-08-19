@@ -19,12 +19,12 @@ export function HistoryDrawer({ jobs, open, onClose, onSelect, onCancel }: Props
       <button className={`drawer-scrim ${open ? "visible" : ""}`} aria-label="Close history" onClick={onClose} />
       <aside className={`history-drawer ${open ? "open" : ""}`} aria-hidden={!open}>
         <div className="drawer-heading">
-          <div><span className="eyebrow">On this computer</span><h2>Recent enhancements</h2></div>
+          <div><span className="eyebrow">Saved sessions</span><h2>Recent enhancements</h2></div>
           <button className="icon-button" aria-label="Close history" onClick={onClose}><XIcon size={18} /></button>
         </div>
         <div className="history-list">
           {jobs.length === 0 ? (
-            <div className="history-empty"><FilmIcon size={24} /><strong>No jobs yet</strong><span>Your local history will appear here.</span></div>
+            <div className="history-empty"><FilmIcon size={24} /><strong>No jobs yet</strong><span>Enhancement jobs will appear here.</span></div>
           ) : jobs.map((job) => {
             const active = ACTIVE.includes(job.status);
             const name = job.playlist_id ? "Playlist enhancement" : job.kind === "stream" ? "Watch-while-enhancing" : job.kind === "preview" ? "Preview enhancement" : job.trim_end || job.trim_start ? "Range enhancement" : "Full video enhancement";
@@ -40,7 +40,7 @@ export function HistoryDrawer({ jobs, open, onClose, onSelect, onCancel }: Props
             );
           })}
         </div>
-        <p className="drawer-footnote">History stores metadata and local file locations only. Videos are never copied into the database.</p>
+        <p className="drawer-footnote">Open a session to restore its settings, live progress, or completed result.</p>
       </aside>
     </>
   );

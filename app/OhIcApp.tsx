@@ -16,7 +16,7 @@ import { ComparisonViewer } from "./components/ComparisonViewer";
 import { AsyncEnhancementViewer } from "./components/AsyncEnhancementViewer";
 import { EnhancementWorkspace } from "./components/EnhancementWorkspace";
 import { HistoryDrawer } from "./components/HistoryDrawer";
-import { HardDriveIcon, HistoryIcon, ShieldIcon, SparkIcon, XIcon } from "./components/Icons";
+import { HardDriveIcon, HistoryIcon, SparkIcon, XIcon } from "./components/Icons";
 import { PlaylistIcon } from "./components/Icons";
 import { ProgressPanel } from "./components/ProgressPanel";
 import { SourcePicker } from "./components/SourcePicker";
@@ -281,7 +281,7 @@ export function OhIcApp() {
       <nav className="topbar">
         <button className="brand" onClick={reset} aria-label="OhIc home"><span className="brand-mark">O</span><span>OhIc</span></button>
         <div className="top-actions">
-          {health && <span className={`hardware-pill ${health.status}`}><i /> {health.hardware.display_name}<small>{health.hardware.acceleration}</small></span>}
+          {health && <span className={`hardware-pill ${health.status}`}><i /> {health.status === "ok" ? "Engine ready" : "Setup required"}</span>}
           <button onClick={() => { setPlaylistsOpen(true); setStorageOpen(false); setHistoryOpen(false); void refreshPlaylists(); }}><PlaylistIcon size={17} /> Playlists{hasActivePlaylist && <i className="nav-live" />}</button>
           <button onClick={() => { setStorageOpen(true); setPlaylistsOpen(false); setHistoryOpen(false); void refreshStorage(); }}><HardDriveIcon size={17} /> Storage</button>
           <button onClick={() => { setHistoryOpen(true); setPlaylistsOpen(false); setStorageOpen(false); void refreshHistory(); }}><HistoryIcon size={17} /> History</button>
@@ -293,14 +293,14 @@ export function OhIcApp() {
           <div className="ambient ambient-one" />
           <div className="ambient ambient-two" />
           <section className="hero-copy">
-            <span className="hero-kicker"><SparkIcon size={15} /> Local AI video restoration</span>
+            <span className="hero-kicker"><SparkIcon size={15} /> AI video enhancement</span>
             <h1>Make old video<br /><em>look new again.</em></h1>
-            <p>Restore clarity, lift resolution, and inspect every detail — privately, with the AI hardware already in your Mac.</p>
+            <p>Upscale individual videos, selected ranges, or entire playlists—and watch results as they are produced.</p>
           </section>
           <SourcePicker onLoaded={(source) => { setVideo(source); setError(null); }} onPlaylistStarted={(started) => { setPlaylists((current) => [started, ...current.filter((item) => item.id !== started.id)]); setPlaylistsOpen(true); setError(null); }} onError={setError} />
           <div className="trust-row">
-            <span><ShieldIcon size={16} /> Stays on your Mac</span>
-            <span>Real-ESRGAN</span>
+            <span>Real-ESRGAN ×2</span>
+            <span>On-device processing</span>
             <span>No account required</span>
           </div>
         </main>
@@ -308,7 +308,7 @@ export function OhIcApp() {
         <div className="workspace-wrap">
           <div className="workspace-topline">
             <button onClick={reset}>← New video</button>
-            <span><ShieldIcon size={14} /> Local session</span>
+            <span>{video.source_type === "youtube" ? "YouTube source" : "Uploaded source"}</span>
           </div>
           {job && !["complete", "failed", "cancelled"].includes(job.status) && <ProgressPanel job={job} onCancel={() => void cancel()} />}
           <EnhancementWorkspace key={`${video.id}:${job?.id ?? "new"}`} video={video} initialJob={job} busy={busy} onRun={(...args) => void runJob(...args)} />

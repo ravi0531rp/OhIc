@@ -4,7 +4,7 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
-  echo "FFmpeg is required. On macOS, install it with: brew install ffmpeg"
+  echo "FFmpeg and FFprobe are required. Install FFmpeg for your operating system, then retry."
   exit 1
 fi
 
@@ -18,7 +18,7 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "Setting up the local AI engine…"
+echo "Setting up the enhancement engine…"
 (cd "$PROJECT_DIR/backend" && uv sync --group dev)
 
 echo "Setting up the workspace…"

@@ -27,7 +27,7 @@ def make_video() -> VideoRecord:
     )
 
 
-def test_stream_plan_uses_short_startup_part_and_dynamic_chunk_size():
+def test_stream_plan_uses_largest_adaptive_initial_part_and_short_followups():
     video = make_video()
     fast = JobCreate(
         video_id=video.id,
@@ -47,8 +47,15 @@ def test_stream_plan_uses_short_startup_part_and_dynamic_chunk_size():
     fast_plan = build_stream_state(video, fast, video.metadata.duration)
     maximum_plan = build_stream_state(video, maximum, video.metadata.duration)
 
-    assert 30 <= fast_plan.chunk_duration <= 120
-    assert maximum_plan.chunk_duration < fast_plan.chunk_duration
-    assert fast_plan.chunks[0].end - fast_plan.chunks[0].start <= 30
-    assert fast_plan.chunks[1].end - fast_plan.chunks[1].start == fast_plan.chunk_duration
+    fast_initial = fast_plan.chunks[0].end - fast_plan.chunks[0].start
+    maximum_initial = maximum_plan.chunks[0].end - maximum_plan.chunks[0].start
+    fast_followups = [chunk.end - chunk.start for chunk in fast_plan.chunks[1:]]
+
+    assert 30 <= fast_initial <= 120
+    assert maximum_initial < fast_initial
+    assert fast_plan.chunk_duration == 20
+    assert fast_followups
+    assert all(duration <= 20 for duration in fast_followups)
+    assert all(duration == 20 for duration in fast_followups[:-1])
+    assert fast_initial > max(fast_followups)
     assert fast_plan.chunks[-1].end == video.metadata.duration

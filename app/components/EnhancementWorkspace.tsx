@@ -4,7 +4,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { JobKind, JobRecord, QualityPreset, ResolutionTarget, VideoRecord } from "../lib/types";
-import { ChevronIcon, PlayIcon, ShieldIcon, SparkIcon } from "./Icons";
+import { ChevronIcon, PlayIcon, SparkIcon } from "./Icons";
 import { mediaUrl } from "../lib/api";
 
 type Props = {
@@ -195,7 +195,7 @@ export function EnhancementWorkspace({ video, initialJob, busy, onRun }: Props) 
             <small>Plays in rolling parts as they finish</small>
           </button>
         </div>
-        <p className="private-note"><ShieldIcon size={15} /> Video never leaves this computer</p>
+        <p className="output-note">H.264 MP4 · source audio retained when available</p>
       </aside>
     </main>
   );

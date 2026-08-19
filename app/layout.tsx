@@ -14,17 +14,17 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   metadataBase: new URL("http://localhost:3000"),
-  title: "OhIc — Local AI video restoration",
-  description: "Restore and upscale video on your own computer. Private by design.",
+  title: "OhIc — AI video enhancement",
+  description: "Restore and upscale videos with Real-ESRGAN.",
   openGraph: {
-    title: "OhIc — Local AI video restoration",
-    description: "Bring old videos back into focus, privately on your own computer.",
+    title: "OhIc — AI video enhancement",
+    description: "Restore and upscale videos with Real-ESRGAN.",
     images: [{ url: "/og.png", width: 1729, height: 910, alt: "OhIc before and after video restoration" }],
   },
   twitter: {
     card: "summary_large_image",
-    title: "OhIc — Local AI video restoration",
-    description: "Bring old videos back into focus, privately on your own computer.",
+    title: "OhIc — AI video enhancement",
+    description: "Restore and upscale videos with Real-ESRGAN.",
     images: ["/og.png"],
   },
 };

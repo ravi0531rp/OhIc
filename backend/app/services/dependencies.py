@@ -9,5 +9,5 @@ def dependency_status(command: str) -> DependencyStatus:
         return DependencyStatus(available=True, path=path)
     return DependencyStatus(
         available=False,
-        message=f"{command} is not installed. On macOS, run: brew install ffmpeg",
+        message=f"{command} is not installed. Install FFmpeg and restart OhIc.",
     )

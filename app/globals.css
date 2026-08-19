@@ -94,7 +94,6 @@ button { color: inherit; }
 }
 .hardware-pill i { background: var(--accent); border-radius: 50%; box-shadow: 0 0 0 3px rgba(217,255,103,.08); height: 6px; width: 6px; }
 .hardware-pill.degraded i { background: #f4b45f; }
-.hardware-pill small { color: var(--muted-2); font-size: inherit; }
 
 .landing {
   align-items: center;
@@ -180,18 +179,7 @@ button { color: inherit; }
 .dropzone strong { font-size: 15px; font-weight: 590; }
 .dropzone > span:not(.drop-icon) { color: #7f847e; font-size: 12px; margin-top: 7px; }
 .dropzone small { color: #565b56; font-size: 10px; margin-top: 28px; }
-.local-proof {
-  align-items: center;
-  color: #8f948e;
-  display: flex;
-  font-size: 10px;
-  gap: 7px;
-  justify-content: center;
-  letter-spacing: .02em;
-  padding: 12px 8px 4px;
-}
-.local-proof svg, .private-note svg, .legal-note svg { color: var(--accent); }
-.local-proof span { color: #565b56; margin-left: 4px; }
+.legal-note svg { color: var(--accent); }
 .youtube-pane { min-height: 348px; padding: 34px 30px 20px; }
 .youtube-mode { background: #0f110f; border: 1px solid var(--line); border-radius: 9px; display: inline-flex; margin-bottom: 25px; padding: 3px; }
 .youtube-mode button { background: transparent; border: 0; border-radius: 6px; color: #666b66; cursor: pointer; font-size: 9px; padding: 7px 10px; }
@@ -333,7 +321,7 @@ button { color: inherit; }
 .stream-action > small { color: #6e785b; font-size: 7px; }
 .stream-action:hover { background: rgba(217,255,103,.08); border-color: rgba(217,255,103,.38); }
 .primary-action:disabled, .secondary-action:disabled, .stream-action:disabled { cursor: wait; opacity: .5; }
-.private-note { align-items: center; color: #505550; display: flex; font-size: 8px; gap: 6px; justify-content: center; margin: 12px 0 0; }
+.output-note { color: #505550; font-size: 8px; margin: 12px 0 0; text-align: center; }
 
 .progress-panel { align-items: center; background: #151915; border: 1px solid rgba(217,255,103,.2); border-radius: 15px; display: flex; gap: 16px; margin-bottom: 16px; padding: 18px 20px; }
 .progress-orb { align-items: center; background: rgba(217,255,103,.08); border: 1px solid rgba(217,255,103,.2); border-radius: 12px; color: var(--accent); display: flex; height: 43px; justify-content: center; width: 43px; }
@@ -554,7 +542,6 @@ button { color: inherit; }
 
 @media (max-width: 680px) {
   .topbar { height: 62px; padding: 0 18px; }
-  .hardware-pill small { display: none; }
   .landing { min-height: calc(100vh - 62px); padding: 48px 16px 110px; }
   .hero-copy h1 { font-size: 48px; }
   .hero-copy > p { font-size: 14px; }

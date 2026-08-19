@@ -30,7 +30,7 @@ export function ProgressPanel({ job, onCancel }: Props) {
         <div className="progress-track"><span style={{ width: `${progress.percent}%` }} /></div>
         <div className="progress-stats">
           <span>{progress.frames_total ? `${progress.frames_done.toLocaleString()} / ${progress.frames_total.toLocaleString()} frames` : progress.detail ?? "Preparing pipeline"}</span>
-          <span>{progress.processing_fps ? `${progress.processing_fps.toFixed(2)} FPS` : "Local AI"}</span>
+          <span>{progress.processing_fps ? `${progress.processing_fps.toFixed(2)} FPS` : progress.detail ?? "Measuring speed"}</span>
           <span>{progress.eta_seconds ? `${timeLabel(progress.eta_seconds)} remaining` : timeLabel(progress.elapsed_seconds)}</span>
         </div>
       </div>

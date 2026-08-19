@@ -47,6 +47,9 @@ export function AsyncEnhancementViewer({ job, video, onLeave, onCancel, onHistor
     (job.trim_end ?? video.metadata.duration) - job.trim_start,
   );
   const bufferPercent = Math.min(100, ((stream?.buffered_seconds ?? 0) / selectedDuration) * 100);
+  const initialPartDuration = stream?.chunks[0]
+    ? stream.chunks[0].end - stream.chunks[0].start
+    : 0;
 
   useEffect(() => {
     if (!continuePlaying || !current?.playback_url) return;
@@ -128,15 +131,15 @@ export function AsyncEnhancementViewer({ job, video, onLeave, onCancel, onHistor
 
         <aside className="async-queue">
           <div className="async-progress-copy">
-            <span className="eyebrow">Local enhancement</span>
+            <span className="eyebrow">Enhancement progress</span>
             <div><h2>{job.progress.stage}</h2><strong>{Math.round(job.progress.percent)}%</strong></div>
             <p>{job.progress.detail ?? `${job.target_width} × ${job.target_height} · ${job.preset}`}</p>
           </div>
           <div className="async-overall-track"><i style={{ width: `${job.progress.percent}%` }} /></div>
           <div className="async-plan">
-            <span>Adaptive part size</span>
-            <strong>Up to {formatTime(stream?.chunk_duration ?? 0)}</strong>
-            <small>Calculated from source size, output resolution, duration, and quality mode.</small>
+            <span>Initial buffer</span>
+            <strong>{formatTime(initialPartDuration)}</strong>
+            <small>Largest part first · later parts are {formatTime(stream?.chunk_duration ?? 20)} max.</small>
           </div>
           <div className="async-parts" aria-label="Enhanced video parts">
             {stream?.chunks.map((chunk) => (

@@ -43,18 +43,18 @@ def build_stream_state(video: VideoRecord, request: JobCreate, trim_end: float) 
     decode_work = min(1.35, max(0.85, sqrt(max(1.0, megabytes_per_minute) / 30)))
     duration_work = 1.15 if selected_duration > 2 * 60 * 60 else 1.0
     raw_seconds = 120 / sqrt(upscale_work * preset_work * decode_work * duration_work)
-    chunk_duration = float(min(120, max(30, round(raw_seconds / 15) * 15)))
-    startup_duration = min(30.0, max(10.0, chunk_duration / 2))
+    initial_chunk_duration = float(min(120, max(30, round(raw_seconds / 15) * 15)))
+    followup_chunk_duration = 20.0
 
     chunks: list[StreamChunk] = []
     cursor = request.trim_start
     while cursor < trim_end - 0.001:
-        span = startup_duration if not chunks else chunk_duration
+        span = initial_chunk_duration if not chunks else followup_chunk_duration
         end = min(trim_end, cursor + span)
         chunks.append(StreamChunk(index=len(chunks), start=cursor, end=end))
         cursor = end
     return StreamState(
-        chunk_duration=chunk_duration,
+        chunk_duration=followup_chunk_duration,
         total_chunks=len(chunks),
         chunks=chunks,
     )

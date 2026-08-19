@@ -37,10 +37,10 @@ export function StorageDrawer({ items, open, busy, onClose, onCleanup }: Props) 
       <button className={`drawer-scrim ${open ? "visible" : ""}`} aria-label="Close storage" onClick={onClose} />
       <aside className={`history-drawer storage-drawer ${open ? "open" : ""}`} aria-hidden={!open}>
         <div className="drawer-heading">
-          <div><span className="eyebrow">Local files · {formatBytes(total)}</span><h2>Manage storage</h2></div>
+          <div><span className="eyebrow">Managed files · {formatBytes(total)}</span><h2>Manage storage</h2></div>
           <button className="icon-button" aria-label="Close storage" onClick={onClose}><XIcon size={18} /></button>
         </div>
-        <p className="storage-intro">Select downloaded sources, uploads, or completed results to remove from this Mac.</p>
+        <p className="storage-intro">Select downloaded sources, uploads, or completed results to remove.</p>
         <div className="storage-list">
           {items.length === 0 ? (
             <div className="history-empty"><FilmIcon size={24} /><strong>No saved videos</strong><span>Imported videos and results will appear here.</span></div>
@@ -58,7 +58,7 @@ export function StorageDrawer({ items, open, busy, onClose, onCleanup }: Props) 
           <button
             disabled={!validSelected.size || busy}
             onClick={() => {
-              if (window.confirm(`Permanently delete ${validSelected.size} selected item(s) from this Mac?`)) {
+              if (window.confirm(`Permanently delete ${validSelected.size} selected item(s)?`)) {
                 onCleanup([...validSelected]);
               }
             }}
