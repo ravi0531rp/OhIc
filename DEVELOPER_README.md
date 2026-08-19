@@ -144,7 +144,7 @@ version does not have to be the final virtual-environment interpreter.
 ### 3. Clone the repository
 
 ```bash
-git clone <your-ohic-repository-url>
+git clone https://github.com/ravi0531rp/OhIc.git
 cd OhIc
 ```
 
