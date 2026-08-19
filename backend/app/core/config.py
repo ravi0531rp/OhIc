@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     max_upload_gb: float = 20.0
     default_model: str = "realesrgan-x2plus"
     default_codec: str = "h264"
+    enable_realbasicvsr: bool = True
     log_level: str = "INFO"
     stale_temp_hours: int = 24
 

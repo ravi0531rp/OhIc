@@ -48,6 +48,21 @@ export type Health = {
   hardware: HardwareInfo;
 };
 
+export type EnhancementModel = {
+  identifier: string;
+  display_name: string;
+  scale_factors: number[];
+  supported_devices: string[];
+  weights: string[];
+  license: string;
+  source_url: string;
+  description: string;
+  experimental: boolean;
+  temporal: boolean;
+  supports_stream: boolean;
+  max_input_pixels?: number;
+};
+
 export type QualityPreset = "fast" | "balanced" | "maximum";
 export type JobKind = "preview" | "full" | "stream";
 export type JobStatus =

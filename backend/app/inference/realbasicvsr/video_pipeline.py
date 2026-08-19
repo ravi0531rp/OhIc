@@ -16,7 +16,7 @@ from typing import Protocol
 import numpy as np
 
 from app.inference.realbasicvsr.chunking import recommended_window, temporal_windows
-from app.jobs.pipeline import JobRuntime
+from app.jobs.runtime import JobRuntime
 from app.video.probe import probe_video
 
 ProgressCallback = Callable[[str, float, str | None], None]
@@ -124,10 +124,18 @@ def run_experimental_pipeline(
     target_width: int | None = None,
     target_height: int | None = None,
     max_input_pixels: int = 1280 * 720,
+    start_at: float = 0,
+    duration: float | None = None,
+    temp_root: Path | None = None,
 ) -> RealBasicVSRRunStats:
     """Run bounded temporal inference without registering an application model."""
     runtime = runtime or JobRuntime()
     metadata = probe_video(source)
+    start_at = max(0.0, min(start_at, metadata.duration))
+    available_duration = max(0.0, metadata.duration - start_at)
+    selected_duration = min(duration, available_duration) if duration else available_duration
+    if selected_duration <= 0:
+        raise ValueError("The selected RealBasicVSR range is empty.")
     if metadata.width * metadata.height > max_input_pixels:
         raise ValueError(
             "This source is above the experimental RealBasicVSR 720p input limit. "
@@ -148,8 +156,10 @@ def run_experimental_pipeline(
         target_height,
     )
     fps = metadata.fps or 30.0
-    total_frames = metadata.frame_count or max(1, round(metadata.duration * fps))
+    total_frames = max(1, round(selected_duration * fps))
     output.parent.mkdir(parents=True, exist_ok=True)
+    if temp_root:
+        temp_root.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
     decode_seconds = 0.0
     inference_seconds = 0.0
@@ -157,7 +167,9 @@ def run_experimental_pipeline(
     frames_done = 0
     audio_mode = "none"
 
-    with tempfile.TemporaryDirectory(prefix="ohic-realbasicvsr-") as temp_name:
+    with tempfile.TemporaryDirectory(
+        prefix="ohic-realbasicvsr-", dir=temp_root
+    ) as temp_name:
         workdir = Path(temp_name)
         video_only = workdir / "restored-video.mp4"
         final_output = workdir / "restored-final.mp4"
@@ -166,25 +178,23 @@ def run_experimental_pipeline(
             progress("Decoding", 0, f"{metadata.width}×{metadata.height} at {fps:g} FPS")
         decoder_log = log_path.open("wb")
         encoder_log = log_path.open("ab")
-        decoder = subprocess.Popen(
-            [
-                "ffmpeg",
-                "-v",
-                "error",
-                "-i",
-                str(source),
-                "-map",
-                "0:v:0",
-                "-an",
-                "-f",
-                "rawvideo",
-                "-pix_fmt",
-                "rgb24",
-                "pipe:1",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=decoder_log,
-        )
+        decoder_args = ["ffmpeg", "-v", "error"]
+        if start_at:
+            decoder_args += ["-ss", f"{start_at:.3f}"]
+        decoder_args += ["-i", str(source)]
+        if duration is not None:
+            decoder_args += ["-t", f"{selected_duration:.3f}"]
+        decoder_args += [
+            "-map",
+            "0:v:0",
+            "-an",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "pipe:1",
+        ]
+        decoder = subprocess.Popen(decoder_args, stdout=subprocess.PIPE, stderr=decoder_log)
         encoder_args = [
             "ffmpeg",
             "-y",
@@ -260,6 +270,12 @@ def run_experimental_pipeline(
                     encoder.stdin.write(frame.tobytes())
                     frames_done += 1
                 encoding_seconds += time.perf_counter() - encode_started
+                if progress:
+                    progress(
+                        "Restoring",
+                        min(95.0, frames_done / max(1, total_frames) * 95),
+                        f"Restored {frames_done} of {total_frames} frames",
+                    )
             if runtime.cancel.is_set():
                 raise InterruptedError("RealBasicVSR processing was cancelled.")
             if progress:
@@ -288,6 +304,12 @@ def run_experimental_pipeline(
                     "error",
                     "-i",
                     str(video_only),
+                ]
+                if start_at:
+                    copy_args += ["-ss", f"{start_at:.3f}"]
+                if duration is not None:
+                    copy_args += ["-t", f"{selected_duration:.3f}"]
+                copy_args += [
                     "-i",
                     str(source),
                     "-map",
@@ -315,6 +337,12 @@ def run_experimental_pipeline(
                         "error",
                         "-i",
                         str(video_only),
+                    ]
+                    if start_at:
+                        transcode_args += ["-ss", f"{start_at:.3f}"]
+                    if duration is not None:
+                        transcode_args += ["-t", f"{selected_duration:.3f}"]
+                    transcode_args += [
                         "-i",
                         str(source),
                         "-map",
@@ -370,7 +398,7 @@ def run_experimental_pipeline(
         model_resolution=f"{model_width}x{model_height}",
         output_resolution=f"{output_width}x{output_height}",
         fps=fps,
-        duration_seconds=metadata.duration,
+        duration_seconds=frames_done / fps,
         frame_count=frames_done,
         window_frames=window_frames,
         overlap_frames=overlap_frames,

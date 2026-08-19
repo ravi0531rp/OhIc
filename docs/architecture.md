@@ -14,9 +14,9 @@ OhIc is split into a browser workspace and a localhost-only Python engine.
   Each runtime owns a cancellation event and all child processes.
 - **Video:** FFprobe inspects streams. FFmpeg decodes RGB frames and encodes output progressively;
   audio is attached after the video stream completes.
-- **Inference:** `VideoEnhancementModel` owns metadata, weights, supported devices, loading,
-  unloading, frame/batch enhancement and memory estimation. The registry hides concrete model
-  choice from jobs and APIs.
+- **Inference:** a central registry exposes engine metadata and capabilities. Frame engines use
+  `VideoEnhancementModel`; temporal engines own bounded sequence inference. Jobs dispatch by the
+  persisted engine ID.
 
 ## Processing sequence
 
@@ -25,7 +25,7 @@ OhIc is split into a browser workspace and a localhost-only Python engine.
 3. Create a typed SQLite job and start its isolated runtime.
 4. Download and structurally validate official model weights on first use.
 5. Pipe frames from FFmpeg to the selected model without retaining the complete video.
-6. Process one frame at a time in tiles, retrying an allocation failure with a smaller tile.
+6. Process either one frame at a time in tiles or bounded overlapping temporal windows.
 7. Pipe RGB output into a progressive H.264 encoder.
 8. Mux the source audio, use `-shortest`, add browser fast-start metadata, and atomically expose
    the complete result through its stored job record.
@@ -34,11 +34,11 @@ OhIc is split into a browser workspace and a localhost-only Python engine.
 ## Extension points
 
 Frame-oriented restoration backends implement `VideoEnhancementModel` and register under a stable
-ID. A temporal model must not be forced through `enhance_frame`; it needs a video-job or bounded
-sequence contract that can own temporal context, chunk overlap and engine-specific device support.
-The isolated RealBasicVSR experiment documents that boundary before it is added to production.
-Future denoise, interpolation and color stages should be separate typed pipeline stages rather
-than flags embedded in the Real-ESRGAN adapter.
+ID. RealBasicVSR demonstrates the temporal boundary: its engine owns sequence enhancement while
+its video pipeline owns context windows, audio, timestamps, cancellation, and device fallback.
+Capability metadata prevents unsupported stream or oversized-input jobs. Future denoise,
+interpolation and color stages should be separate typed pipeline stages rather than flags embedded
+in an engine adapter.
 
 ## Current durability model
 

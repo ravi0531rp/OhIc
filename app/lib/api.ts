@@ -1,4 +1,5 @@
 import type {
+  EnhancementModel,
   Health,
   JobKind,
   JobRecord,
@@ -31,6 +32,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<Health>("/api/health"),
+  models: () => request<EnhancementModel[]>("/api/models"),
   history: () => request<JobRecord[]>("/api/jobs"),
   job: (id: string) => request<JobRecord>(`/api/jobs/${id}`),
   video: (id: string) => request<VideoRecord>(`/api/videos/${id}`),
@@ -96,6 +98,7 @@ export const api = {
     target_width: number;
     target_height: number;
     preset: QualityPreset;
+    model_id: string;
     preview_timestamp: number;
     trim_start?: number;
     trim_end?: number;
@@ -103,7 +106,7 @@ export const api = {
     request<JobRecord>("/api/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...input, model_id: "realesrgan-x2plus" }),
+      body: JSON.stringify(input),
     }),
   cancelJob: (id: string) =>
     request<JobRecord>(`/api/jobs/${id}/cancel`, { method: "POST" }),

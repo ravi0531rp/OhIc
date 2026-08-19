@@ -19,7 +19,7 @@ def get_database() -> Database:
 
 @lru_cache
 def get_registry() -> ModelRegistry:
-    return ModelRegistry()
+    return ModelRegistry(enable_realbasicvsr=get_settings().enable_realbasicvsr)
 
 
 @lru_cache

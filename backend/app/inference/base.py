@@ -18,6 +18,11 @@ class ModelMetadata:
     weights: tuple[str, ...]
     license: str
     source_url: str
+    description: str = "Frame-based video enhancement"
+    experimental: bool = False
+    temporal: bool = False
+    supports_stream: bool = True
+    max_input_pixels: int | None = None
 
 
 class VideoEnhancementModel(ABC):

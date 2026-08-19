@@ -7,6 +7,7 @@ from threading import Event, RLock
 
 import numpy as np
 
+from app.inference.base import ModelMetadata
 from app.inference.realbasicvsr.model import RealBasicVSRNet
 from app.inference.weights import download_weight
 
@@ -41,6 +42,11 @@ def select_device(requested: str = "auto") -> str:
     return "cpu"
 
 
+def is_mps_runtime_failure(error: RuntimeError) -> bool:
+    message = str(error).lower()
+    return any(token in message for token in ("mps", "metal", "not implemented", "placeholder"))
+
+
 def checkpoint_state(checkpoint: object) -> dict[str, object]:
     if not isinstance(checkpoint, dict):
         raise RuntimeError("The RealBasicVSR checkpoint has an unsupported structure.")
@@ -59,8 +65,22 @@ def checkpoint_state(checkpoint: object) -> dict[str, object]:
 
 
 class RealBasicVSREngine:
-    identifier = "realbasicvsr-x4-experimental"
-    display_name = "RealBasicVSR ×4 (Experimental)"
+    metadata = ModelMetadata(
+        identifier="realbasicvsr-x4-experimental",
+        display_name="RealBasicVSR ×4",
+        scale_factors=(4,),
+        supported_devices=("mps", "cuda", "cpu"),
+        weights=(REALBASICVSR_CHECKPOINT,),
+        license="Apache-2.0; checkpoint redistribution terms require review",
+        source_url="https://github.com/ckkelvinchan/RealBasicVSR",
+        description="Temporally-aware restoration with better frame-to-frame consistency",
+        experimental=True,
+        temporal=True,
+        supports_stream=False,
+        max_input_pixels=1280 * 720,
+    )
+    identifier = metadata.identifier
+    display_name = metadata.display_name
     scale = 4
 
     def __init__(self) -> None:

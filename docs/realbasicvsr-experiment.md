@@ -6,18 +6,17 @@ This branch evaluates whether RealBasicVSR gives visibly steadier, more useful r
 OhIc's frame-by-frame Real-ESRGAN path while remaining practical on local hardware. It is an
 experiment, not a production replacement.
 
-Phase 1 is implemented as an isolated CLI path. It uses the real RealBasicVSR checkpoint, bounded
-overlapping temporal windows, FFmpeg video plumbing, output statistics, cancellation-safe process
-cleanup, and optional source-audio stream copy. It is intentionally not registered in the app yet.
-Real-ESRGAN remains the only production engine and all existing requests behave as before.
+Phases 1–3 are implemented on the experimental branch. The real checkpoint, bounded overlapping
+temporal windows, FFmpeg video plumbing, statistics, cancellation-safe cleanup, and source audio
+handling are available through both a research CLI and normal preview/full jobs. The app exposes
+an explicit experimental engine selector, persists that choice in History, validates capabilities
+before queueing, and provides a repeatable two-engine comparison command.
 
-Not implemented in phase 1:
+Still intentionally unsupported:
 
-- app/API engine selection;
-- preview and history integration;
-- resumable jobs;
-- watch-while-enhancing;
-- comparison automation;
+- resumable jobs after a backend process stop;
+- watch-while-enhancing and playlist batches with RealBasicVSR;
+- inputs above 1280×720 unless the research CLI's explicit override is used;
 - spatial tiling or HDR-preserving output.
 
 ## Why this needs a separate path
@@ -27,9 +26,9 @@ sequence, estimates optical flow in both directions, propagates features through
 produces an enhanced sequence. Treating it as a frame adapter would remove the information being
 evaluated.
 
-The phase-one boundary therefore represents `enhance_sequence(frames)` and the end-to-end CLI
-represents `enhance_video`. The production `VideoEnhancementModel.enhance_frame` contract is left
-unchanged until the job layer has a genuinely video-oriented engine contract.
+The temporal boundary therefore represents `enhance_sequence(frames)` and its video pipeline
+represents `enhance_video`. The frame-oriented `VideoEnhancementModel.enhance_frame` contract
+remains unchanged; the job layer dispatches each registered engine to the correct pipeline.
 
 ## Upstream implementation and dependency choice
 
@@ -90,6 +89,21 @@ are never bundled in this repository.
 Apache attribution and license obligations remain in force for the adapted code. See
 [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
 
+## Enable it in the app
+
+The engine is registered by default on this branch. To hide it from `/api/models` and the UI:
+
+```dotenv
+OHIC_ENABLE_REALBASICVSR=false
+```
+
+Restart the backend after changing the setting. Select **RealBasicVSR ×4** under **AI engine** for
+a supported single video. Preview, complete-video, and custom-range jobs use the temporal path;
+History restores the choice. The API model ID is `realbasicvsr-x4-experimental`.
+
+The app rejects sources above 1280×720 and disables watch-while-enhancing for this engine. It never
+silently replaces a selected temporal job with Real-ESRGAN.
+
 ## Run the isolated experiment
 
 Complete the normal backend setup and ensure FFmpeg/FFprobe are available. No additional Python
@@ -129,7 +143,7 @@ effective inference FPS, peak process RSS, output size, and audio mode.
 
 The model is recurrent and bidirectional: a full-video result can depend on distant earlier and
 later frames. No small overlap can be mathematically identical to processing an unbounded video in
-one pass. Carrying only forward hidden state would still omit the backward pass, so phase 1 does
+one pass. Carrying only forward hidden state would still omit the backward pass, so this path does
 not claim exact chunk equivalence.
 
 Instead, each window includes left and right context. Only the center is emitted; context outputs
@@ -155,17 +169,17 @@ video will fit in memory.
 
 ## Device and precision status
 
-| Device | Phase-one status | Precision |
+| Device | Experimental status | Precision |
 | --- | --- | --- |
 | MPS | Experimental; actual small-clip inference verified | FP32 |
 | CUDA | Expected from upstream/PyTorch graph; not tested in this branch yet | FP32 |
 | CPU | Supported and used as automatic fallback | FP32 |
 
-MPS validation on 19 August 2026 used an Apple M3 Pro MacBook Pro with 36 GB unified memory,
-macOS 26.6.1, Python 3.11.15, and PyTorch 2.13.0. The official checkpoint processed a two-frame
-64×64 RGB clip on MPS and produced a valid result. Measured inference was 2.392 seconds, or 0.836
-FPS, with about 514 MiB peak process RSS. The final test file preserved 2 FPS, exactly 1.000-second
-duration, H.264 video, and copied AAC audio.
+MPS validation on 19 August 2026 used a compatible Apple Silicon system with Python 3.11 and
+PyTorch 2.13. The official checkpoint processed a two-frame 64×64 RGB clip on MPS and produced a
+valid result. The final test file preserved 2 FPS, exactly 1.000-second duration, H.264 video, and
+copied AAC audio. Performance and memory vary materially by source and hardware, so run the
+comparison command on the intended system instead of relying on one machine's timing.
 
 This proves that the tested operators and tiny configuration run on this MPS stack. It does not
 prove that 360p–720p clips fit or perform acceptably. `--device auto` tries MPS first and retries the
@@ -194,7 +208,7 @@ yet preserved. Frame interpolation is not performed.
 
 The RGB path avoids an RGB/BGR swap and uses the same FFmpeg color conversion boundary as the
 production pipeline. Formal BT.601/BT.709, range, gamma, HDR, rotation, and metadata round-trip
-validation is still outstanding. Do not use phase-one output as evidence that those properties are
+validation is still outstanding. Do not use experimental output as evidence that those properties are
 preserved.
 
 ## Cancellation and cleanup
@@ -206,6 +220,25 @@ active FFmpeg processes and returns exit code 130. An inference kernel already e
 interrupted mid-window, which is why windows remain deliberately bounded.
 
 ## Test and benchmark workflow
+
+### Experiment log
+
+#### Experiment 1 — integration and comparison smoke test
+
+- Input: synthetic 64×64 RGB clip, 2 FPS, 1 second, 2 frames, AAC audio.
+- Device: MPS, FP32.
+- Output: 128×128 H.264/AAC, 2 FPS, exactly 1 second for both engines.
+- Real-ESRGAN: 1.077 seconds, about 3.50 processing FPS, 22,211 bytes.
+- RealBasicVSR: two-frame window with no overlap; 0.495 seconds including model load, about
+  9.33 inference FPS, 18,634 bytes, about 581 MiB peak process RSS.
+- Job integration: actual preview and full jobs completed; an in-flight full job cancelled without
+  publishing a partial output and cleaned its temporary workspace.
+- Visual observations: this generated clip validates plumbing, not perceptual quality. It is too
+  short and simple to judge temporal stability, faces, motion, chunk boundaries, or product fit.
+
+These figures are a correctness smoke test, not a representative speed comparison. The checkpoint
+was warm in the local cache, and the very small input does not reflect normal decoder, model, or
+memory scaling.
 
 Run the engineering tests without downloading the model:
 
@@ -229,21 +262,26 @@ For visual evaluation, use short local or clearly redistributable clips. Do not 
 | Fine detail | buildings, text, foliage | changing glyphs, shimmer, unstable edges |
 | Poor source | blur, noise, mixed compression | hallucination, color and contrast shifts |
 
-For every clip, compare original, Real-ESRGAN, and RealBasicVSR at the same final dimensions and
-encoding settings. Record temporal consistency, face stability, text shape, foliage shimmer,
-motion artifacts, hallucination, chunk-boundary jumps, color fidelity, processing FPS, peak RSS,
-and output size. A comparison script is phase 3; phase 1 prints the RealBasicVSR measurements needed
-for a manual comparison.
+For every clip, compare original, Real-ESRGAN, and RealBasicVSR at the same selected source range
+and final dimensions. The comparison command prepares one shared source clip before running either
+engine, so both receive identical decoded content:
 
-## Phase-two integration boundary
+```bash
+backend/.venv/bin/python backend/scripts/compare_engines.py \
+  --input /path/to/input.mp4 \
+  --output-dir tmp/comparison \
+  --start 30 \
+  --duration 10 \
+  --target-width 1280 \
+  --target-height 720
+```
 
-The next milestone should introduce a video-job engine interface rather than extending the current
-frame method. The production job runner can then dispatch Real-ESRGAN to its streaming frame path
-and RealBasicVSR to this bounded sequence path through one central registry. API requests without
-an engine must continue to default to `realesrgan-x2plus`; old persisted jobs already carry that
-model ID. RealBasicVSR should be behind a disabled-by-default capability flag until preview, full
-jobs, progress, cancellation, errors, and history have all been tested.
+The directory contains `original.mp4`, `realesrgan.mp4`, `realbasicvsr.mp4`, and
+`comparison.json`. The report records device, time, FPS, dimensions, file sizes, temporal window
+configuration, and a visual checklist covering consistency, faces, text, foliage, motion,
+hallucination, boundaries, and color. Optional `--device`, `--chunk-frames`, `--overlap-frames`,
+and `--allow-large-input` arguments match the isolated experiment.
 
 Watch-while-enhancing remains unsupported for RealBasicVSR until independent temporal windows are
-visually proven not to introduce boundary artifacts. Hard-process resume is also unsupported
-because recurrent state and context are not persisted.
+visually proven not to introduce objectionable boundary artifacts. Hard-process resume is also
+unsupported because recurrent state and context are not persisted.

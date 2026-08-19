@@ -32,6 +32,23 @@ def test_model_registry_hides_test_model_from_product_list():
     assert registry.get("lanczos-test").metadata.display_name == "Lanczos test model"
 
 
+def test_experimental_registry_exposes_realbasicvsr_capabilities_when_enabled():
+    registry = ModelRegistry(enable_realbasicvsr=True)
+    temporal = registry.get("realbasicvsr-x4-experimental")
+
+    assert temporal.metadata.experimental is True
+    assert temporal.metadata.temporal is True
+    assert temporal.metadata.supports_stream is False
+    assert temporal.metadata.max_input_pixels == 1280 * 720
+
+
+def test_old_persisted_job_without_model_id_defaults_to_realesrgan():
+    payload = make_job().model_dump(mode="json")
+    payload.pop("model_id")
+
+    assert JobRecord.model_validate(payload).model_id == "realesrgan-x2plus"
+
+
 def test_job_lifecycle_persists_in_sqlite(tmp_path: Path):
     database = Database(tmp_path / "ohic.sqlite3")
     job = make_job()

@@ -184,6 +184,33 @@ def test_experimental_video_pipeline_preserves_fps_duration_and_audio(tmp_path: 
     subprocess.run(["sh", "-c", "command -v ffmpeg"], capture_output=True).returncode != 0,
     reason="FFmpeg is required",
 )
+def test_experimental_video_pipeline_applies_selected_range(tmp_path: Path):
+    source = tmp_path / "source.mp4"
+    output = tmp_path / "selected-range.mp4"
+    make_synthetic_video(source)
+
+    stats = run_experimental_pipeline(
+        source,
+        output,
+        SyntheticSequenceEngine(),
+        window_frames=4,
+        overlap_frames=1,
+        target_width=128,
+        target_height=128,
+        start_at=0.25,
+        duration=0.5,
+    )
+
+    output_metadata = probe_video(output)
+    assert output_metadata.duration == pytest.approx(0.5, abs=0.2)
+    assert output_metadata.audio_codec == "AAC"
+    assert stats.frame_count == 3
+
+
+@pytest.mark.skipif(
+    subprocess.run(["sh", "-c", "command -v ffmpeg"], capture_output=True).returncode != 0,
+    reason="FFmpeg is required",
+)
 def test_experimental_video_pipeline_cancellation_does_not_publish_output(tmp_path: Path):
     source = tmp_path / "source.mp4"
     output = tmp_path / "cancelled.mp4"

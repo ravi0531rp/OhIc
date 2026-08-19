@@ -12,7 +12,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.config import get_settings  # noqa: E402
-from app.inference.realbasicvsr.engine import RealBasicVSREngine, select_device  # noqa: E402
+from app.inference.realbasicvsr.engine import (  # noqa: E402
+    RealBasicVSREngine,
+    is_mps_runtime_failure,
+    select_device,
+)
 from app.inference.realbasicvsr.video_pipeline import run_experimental_pipeline  # noqa: E402
 from app.jobs.pipeline import JobRuntime  # noqa: E402
 
@@ -40,11 +44,6 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument("--debug", action="store_true", help="Print a traceback on failure")
     return result
-
-
-def mps_runtime_failure(error: RuntimeError) -> bool:
-    message = str(error).lower()
-    return any(token in message for token in ("mps", "metal", "not implemented", "placeholder"))
 
 
 def main() -> int:
@@ -99,7 +98,11 @@ def main() -> int:
                 max_input_pixels=(7680 * 4320 if args.allow_large_input else 1280 * 720),
             )
         except RuntimeError as error:
-            if requested_device != "auto" or device != "mps" or not mps_runtime_failure(error):
+            if (
+                requested_device != "auto"
+                or device != "mps"
+                or not is_mps_runtime_failure(error)
+            ):
                 raise
             emit(
                 "warning",
