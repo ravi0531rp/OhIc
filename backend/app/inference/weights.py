@@ -1,5 +1,6 @@
 import os
 from collections.abc import Callable
+from hashlib import sha256 as sha256_digest
 from pathlib import Path
 
 import httpx
@@ -13,11 +14,27 @@ def download_weight(
     url: str,
     destination: Path,
     progress: Callable[[float], None] | None = None,
+    *,
+    sha256: str | None = None,
+    minimum_size: int = 1_000_000,
 ) -> Path:
-    if destination.exists() and destination.stat().st_size > 1_000_000:
+    def valid(path: Path) -> bool:
+        if not path.exists() or path.stat().st_size < minimum_size:
+            return False
+        if not sha256:
+            return True
+        digest = sha256_digest()
+        with path.open("rb") as source:
+            for block in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(block)
+        return digest.hexdigest().lower() == sha256.lower()
+
+    if valid(destination):
         return destination
+    destination.unlink(missing_ok=True)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".part")
+    temporary.unlink(missing_ok=True)
     try:
         with httpx.stream("GET", url, follow_redirects=True, timeout=120) as response:
             response.raise_for_status()
@@ -29,12 +46,14 @@ def download_weight(
                     written += len(chunk)
                     if progress and total:
                         progress(min(100.0, written / total * 100))
-        if temporary.stat().st_size < 1_000_000:
-            raise WeightDownloadError("Downloaded model file is unexpectedly small.")
+        if not valid(temporary):
+            raise WeightDownloadError("Downloaded model file failed integrity validation.")
         os.replace(temporary, destination)
         return destination
-    except (OSError, httpx.HTTPError) as exc:
+    except (OSError, httpx.HTTPError, WeightDownloadError) as exc:
         temporary.unlink(missing_ok=True)
+        if isinstance(exc, WeightDownloadError):
+            raise
         raise WeightDownloadError(
             "The AI model could not be downloaded. Check your connection and try again."
         ) from exc

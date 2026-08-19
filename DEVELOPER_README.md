@@ -614,10 +614,15 @@ status is `queued`, `downloading`, `enhancing`, `complete`, `failed`, `cancelled
 
 The weight manager reuses an existing file larger than 1,000,000 bytes. Otherwise it streams the
 official GitHub Release with a 120-second HTTP timeout into a `.part` file, verifies a minimum
-size, and atomically replaces the destination. Model loading looks for `params_ema`, then `params`,
-then the checkpoint root, and performs strict state-dict validation. A validation failure deletes
-the cached checkpoint so the next job downloads it again. CUDA uses FP16 inference; MPS and CPU
-use FP32.
+size and an optional model-specific SHA-256, and atomically replaces the destination. Model
+loading looks for `params_ema`, then `params`, then the checkpoint root, and performs strict
+state-dict validation. A validation failure deletes the cached checkpoint so the next job
+downloads it again. CUDA uses FP16 inference; MPS and CPU use FP32.
+
+The `experiment/realbasicvsr` branch also contains an isolated, sequence-oriented RealBasicVSR ×4
+CLI. It is not registered in the production API or UI. Installation, verified MPS status, bounded
+temporal-window strategy, checkpoint/license details, limitations, and commands are documented in
+[the RealBasicVSR experiment](docs/realbasicvsr-experiment.md).
 
 ### Preview/full frame path
 
@@ -1096,6 +1101,7 @@ and test existing databases before introducing required fields or enum values.
 - [Consumer README](README.md)
 - [Architecture notes](docs/architecture.md)
 - [Model evaluation](docs/model-evaluation.md)
+- [RealBasicVSR experiment](docs/realbasicvsr-experiment.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)
 - [MIT license](LICENSE)
 

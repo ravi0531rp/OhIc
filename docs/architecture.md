@@ -33,10 +33,12 @@ OhIc is split into a browser workspace and a localhost-only Python engine.
 
 ## Extension points
 
-New restoration backends implement `VideoEnhancementModel` and register under a stable ID.
-Temporal models may override `enhance_frames` and introduce a bounded frame-window stage without
-changing the API or UI. Future denoise, interpolation and color stages should be separate typed
-pipeline stages rather than flags embedded in the Real-ESRGAN adapter.
+Frame-oriented restoration backends implement `VideoEnhancementModel` and register under a stable
+ID. A temporal model must not be forced through `enhance_frame`; it needs a video-job or bounded
+sequence contract that can own temporal context, chunk overlap and engine-specific device support.
+The isolated RealBasicVSR experiment documents that boundary before it is added to production.
+Future denoise, interpolation and color stages should be separate typed pipeline stages rather
+than flags embedded in the Real-ESRGAN adapter.
 
 ## Current durability model
 
