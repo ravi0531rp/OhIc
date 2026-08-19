@@ -7,8 +7,14 @@ import structlog
 
 from app.core.config import Settings
 from app.core.device import detect_hardware
+from app.inference.realbasicvsr import RealBasicVSREngine
 from app.inference.registry import ModelRegistry
-from app.jobs.pipeline import JobRuntime, run_pipeline, run_streaming_pipeline
+from app.jobs.pipeline import (
+    JobRuntime,
+    run_pipeline,
+    run_realbasicvsr_pipeline,
+    run_streaming_pipeline,
+)
 from app.models.database import Database
 from app.schemas.job import (
     JobCreate,
@@ -76,7 +82,21 @@ class JobManager:
         trim_end = min(request.trim_end or video.metadata.duration, video.metadata.duration)
         if trim_end <= request.trim_start + 0.1:
             raise ValueError("Choose an enhancement range of at least 0.1 seconds.")
-        self.registry.get(request.model_id)
+        backend = self.registry.get(request.model_id)
+        if request.kind == JobKind.STREAM and not backend.metadata.supports_stream:
+            raise ValueError(
+                f"{backend.metadata.display_name} does not support watch-while-enhancing yet. "
+                "Use Preview or Enhance full video."
+            )
+        if (
+            backend.metadata.max_input_pixels
+            and video.metadata.width * video.metadata.height
+            > backend.metadata.max_input_pixels
+        ):
+            raise ValueError(
+                f"{backend.metadata.display_name} currently supports inputs up to 720p. "
+                "Use Real-ESRGAN for this source."
+            )
         job = JobRecord(
             id=str(uuid.uuid4()),
             video_id=request.video_id,
@@ -129,12 +149,16 @@ class JobManager:
             if not fresh or fresh.status in {JobStatus.CANCELLED, JobStatus.FAILED}:
                 return
             fresh.progress = value
-            if value.stage == "Enhancing" or value.stage.startswith("Enhancing part"):
+            if value.stage in {"Enhancing", "Restoring video"} or value.stage.startswith(
+                "Enhancing part"
+            ):
                 fresh.status = JobStatus.PROCESSING
             elif value.stage in {
                 "Adding audio",
+                "Encoding",
                 "Finalizing",
                 "Joining enhanced parts",
+                "Muxing audio",
             } or value.stage.startswith("Packaging part"):
                 fresh.status = JobStatus.ENCODING
             self.database.save_job(fresh)
@@ -147,24 +171,27 @@ class JobManager:
             self.database.save_job(fresh)
 
         try:
-            hardware = detect_hardware()
-            pipeline = run_streaming_pipeline if job.kind == JobKind.STREAM else run_pipeline
-            pipeline_args = (
+            backend = self.registry.get(job.model_id)
+            common_args = (
                 job,
                 video,
-                self.registry.get(job.model_id),
+                backend,
                 self.settings.resolved_model_dir,
                 self.settings.data_dir / "outputs",
                 self.settings.data_dir / "temp",
-                hardware.device,
-                runtime,
-                update,
             )
-            output, original, seconds = (
-                pipeline(*pipeline_args, stream_progress=update_stream)
-                if job.kind == JobKind.STREAM
-                else pipeline(*pipeline_args)
-            )
+            if isinstance(backend, RealBasicVSREngine):
+                output, original, seconds = run_realbasicvsr_pipeline(
+                    *common_args, runtime, update
+                )
+            else:
+                hardware = detect_hardware()
+                pipeline_args = (*common_args, hardware.device, runtime, update)
+                output, original, seconds = (
+                    run_streaming_pipeline(*pipeline_args, stream_progress=update_stream)
+                    if job.kind == JobKind.STREAM
+                    else run_pipeline(*pipeline_args)
+                )
             if runtime.cancel.is_set():
                 raise InterruptedError("Enhancement cancelled")
             fresh = self.database.get_job(job_id) or job
@@ -183,7 +210,17 @@ class JobManager:
                 elapsed_seconds=seconds,
             )
             self.database.save_job(fresh)
-            logger.info("job_completed", job_id=job_id, seconds=seconds)
+            logger.info(
+                "job_completed",
+                job_id=job_id,
+                engine=job.model_id,
+                seconds=seconds,
+                input_resolution=f"{video.metadata.width}x{video.metadata.height}",
+                output_resolution=f"{job.target_width}x{job.target_height}",
+                fps=video.metadata.fps,
+                frame_count=fresh.progress.frames_done,
+                processing_fps=fresh.progress.processing_fps,
+            )
         except InterruptedError:
             self._cancelled(job_id)
         except Exception as exc:

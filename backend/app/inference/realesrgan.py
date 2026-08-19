@@ -17,6 +17,7 @@ class RealESRGANModel(VideoEnhancementModel):
         weights=("RealESRGAN_x2plus.pth",),
         license="BSD-3-Clause",
         source_url="https://github.com/xinntao/Real-ESRGAN",
+        description="Fast frame-based enhancement",
     )
     weight_url = (
         "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth"

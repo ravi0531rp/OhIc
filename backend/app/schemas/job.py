@@ -80,7 +80,7 @@ class JobRecord(BaseModel):
     video_id: str
     kind: JobKind
     status: JobStatus
-    model_id: str
+    model_id: str = "realesrgan-x2plus"
     preset: QualityPreset
     target_width: int
     target_height: int

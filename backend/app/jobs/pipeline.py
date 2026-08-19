@@ -1,14 +1,19 @@
 import shutil
 import subprocess
-import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 
 from app.inference.base import VideoEnhancementModel
+from app.inference.realbasicvsr.engine import (
+    RealBasicVSREngine,
+    is_mps_runtime_failure,
+    select_device,
+)
+from app.inference.realbasicvsr.video_pipeline import run_experimental_pipeline
+from app.jobs.runtime import JobRuntime
 from app.schemas.job import (
     JobKind,
     JobProgress,
@@ -21,33 +26,6 @@ from app.schemas.video import VideoRecord
 
 ProgressSink = Callable[[JobProgress], None]
 StreamProgressSink = Callable[[StreamState], None]
-
-
-@dataclass
-class JobRuntime:
-    cancel: threading.Event = field(default_factory=threading.Event)
-    processes: list[subprocess.Popen] = field(default_factory=list)
-    lock: threading.RLock = field(default_factory=threading.RLock)
-
-    def add(self, process: subprocess.Popen) -> None:
-        with self.lock:
-            self.processes.append(process)
-
-    def remove(self, process: subprocess.Popen) -> None:
-        with self.lock:
-            if process in self.processes:
-                self.processes.remove(process)
-
-    def stop(self) -> None:
-        self.cancel.set()
-        self.close_processes()
-
-    def close_processes(self) -> None:
-        with self.lock:
-            for process in self.processes:
-                if process.poll() is None:
-                    process.terminate()
-            self.processes.clear()
 
 
 def _preset_config(preset: QualityPreset, device: str) -> tuple[int, str, int]:
@@ -316,6 +294,186 @@ def run_pipeline(
     finally:
         runtime.close_processes()
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+def run_realbasicvsr_pipeline(
+    job: JobRecord,
+    video: VideoRecord,
+    engine: RealBasicVSREngine,
+    model_dir: Path,
+    outputs_dir: Path,
+    temp_root: Path,
+    runtime: JobRuntime,
+    progress: ProgressSink,
+) -> tuple[Path, Path | None, float]:
+    """Run preview/full jobs through the temporal RealBasicVSR engine."""
+    source = Path(video.path)
+    output = outputs_dir / f"{job.id}.mp4"
+    if job.kind == JobKind.PREVIEW:
+        selected_duration = min(5.0, max(0.1, video.metadata.duration))
+        start_at = min(
+            max(0.0, job.preview_timestamp - selected_duration / 2),
+            max(0, video.metadata.duration - selected_duration),
+        )
+        duration: float | None = selected_duration
+    else:
+        start_at = max(0.0, job.trim_start)
+        end_at = min(job.trim_end or video.metadata.duration, video.metadata.duration)
+        selected_duration = max(0.1, end_at - start_at)
+        is_trimmed = start_at > 0.001 or end_at < video.metadata.duration - 0.001
+        duration = selected_duration if is_trimmed else None
+    original = (
+        outputs_dir / f"{job.id}-original.mp4"
+        if job.kind == JobKind.PREVIEW or duration is not None
+        else None
+    )
+    total_frames = max(1, round(selected_duration * (video.metadata.fps or 30)))
+    started = time.monotonic()
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        progress(JobProgress(stage="Preparing video", percent=2, frames_total=total_frames))
+        if original:
+            _run_checked(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-ss",
+                    f"{start_at:.3f}",
+                    "-t",
+                    f"{selected_duration:.3f}",
+                    "-i",
+                    str(source),
+                    "-map",
+                    "0:v:0",
+                    "-map",
+                    "0:a:0?",
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "veryfast",
+                    "-crf",
+                    "20",
+                    "-c:a",
+                    "aac",
+                    "-movflags",
+                    "+faststart",
+                    str(original),
+                ],
+                runtime,
+                "The selected source section could not be prepared.",
+            )
+
+        device = select_device("auto")
+
+        def load(selected_device: str) -> None:
+            engine.load(
+                selected_device,
+                model_dir,
+                lambda percent: progress(
+                    JobProgress(
+                        stage="Downloading model",
+                        percent=min(10, 3 + percent * 0.07),
+                        frames_total=total_frames,
+                        detail="First use only",
+                    )
+                ),
+            )
+            progress(
+                JobProgress(
+                    stage="Loading model",
+                    percent=11,
+                    frames_total=total_frames,
+                    detail=f"{engine.display_name} · {selected_device.upper()}",
+                )
+            )
+
+        emit_started = time.monotonic()
+        last_processing_rate: float | None = None
+
+        def update(stage: str, percent: float, detail: str | None) -> None:
+            nonlocal last_processing_rate
+            elapsed = time.monotonic() - emit_started
+            if stage == "Restoring":
+                mapped_percent = min(92, 12 + percent * 0.84)
+                frames_done = min(total_frames, round(total_frames * percent / 95))
+                rate = frames_done / elapsed if frames_done and elapsed else None
+                if rate:
+                    last_processing_rate = rate
+                eta = (total_frames - frames_done) / rate if rate else None
+                display_stage = "Restoring video"
+            else:
+                mapped_percent = {
+                    "Decoding": 12,
+                    "Encoding": 94,
+                    "Muxing audio": 97,
+                    "Finalizing": 99,
+                }.get(stage, min(99, percent))
+                frames_done = total_frames if mapped_percent >= 94 else 0
+                rate = last_processing_rate
+                eta = None
+                display_stage = stage
+            progress(
+                JobProgress(
+                    stage=display_stage,
+                    percent=mapped_percent,
+                    frames_done=frames_done,
+                    frames_total=total_frames,
+                    processing_fps=rate,
+                    elapsed_seconds=elapsed,
+                    eta_seconds=eta,
+                    detail=detail,
+                )
+            )
+
+        load(device)
+        try:
+            stats = run_experimental_pipeline(
+                source,
+                output,
+                engine,
+                runtime=runtime,
+                progress=update,
+                target_width=job.target_width,
+                target_height=job.target_height,
+                start_at=start_at,
+                duration=duration,
+                temp_root=temp_root,
+            )
+        except RuntimeError as error:
+            if device != "mps" or not is_mps_runtime_failure(error):
+                raise
+            progress(
+                JobProgress(
+                    stage="Switching to CPU",
+                    percent=11,
+                    frames_total=total_frames,
+                    detail="Apple Metal could not run this configuration",
+                )
+            )
+            engine.unload()
+            load("cpu")
+            stats = run_experimental_pipeline(
+                source,
+                output,
+                engine,
+                runtime=runtime,
+                progress=update,
+                target_width=job.target_width,
+                target_height=job.target_height,
+                start_at=start_at,
+                duration=duration,
+                temp_root=temp_root,
+            )
+        return output, original, max(stats.total_seconds, time.monotonic() - started)
+    except Exception:
+        output.unlink(missing_ok=True)
+        if original:
+            original.unlink(missing_ok=True)
+        raise
+    finally:
+        engine.unload()
+        runtime.close_processes()
 
 
 def run_streaming_pipeline(

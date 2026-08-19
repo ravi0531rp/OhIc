@@ -81,6 +81,9 @@ export function ComparisonViewer({ job, video, onBack, onAnother, onPlaylists }:
   const range = job.trim_end || job.trim_start
     ? `${formatTime(job.trim_start)}–${formatTime(job.trim_end ?? video.metadata.duration)}`
     : "Full video";
+  const model = job.model_id.startsWith("realbasicvsr")
+    ? "RealBasicVSR ×4 · Experimental"
+    : "Real-ESRGAN ×2";
 
   return (
     <main className="compare-page">
@@ -149,7 +152,7 @@ export function ComparisonViewer({ job, video, onBack, onAnother, onPlaylists }:
       <section className="result-strip">
         <div><span>Source</span><strong>{video.metadata.width} × {video.metadata.height}</strong></div>
         <div><span>Enhanced</span><strong>{job.target_width} × {job.target_height}</strong></div>
-        <div><span>Model</span><strong>Real-ESRGAN ×2</strong></div>
+        <div><span>Model</span><strong>{model}</strong></div>
         <div><span>Preset</span><strong>{job.preset[0].toUpperCase() + job.preset.slice(1)}</strong></div>
         <div><span>Range</span><strong>{range}</strong></div>
         <div><span>Processing time</span><strong>{job.processing_seconds ? `${Math.round(job.processing_seconds)} sec` : "—"}</strong></div>

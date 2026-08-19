@@ -307,6 +307,7 @@ Copy `.env.example` to `.env`. Every application setting is listed below.
 | `OHIC_STALE_TEMP_HOURS` | integer hours | `24` | On backend startup, files and directories directly under `data/temp` older than this age are removed. Completed outputs and stream parts are not affected. |
 | `OHIC_DEFAULT_MODEL` | model ID | `realesrgan-x2plus` | Reserved pipeline default. Current UI/API requests explicitly default `model_id` to `realesrgan-x2plus`; changing only this variable does not change submitted jobs yet. |
 | `OHIC_DEFAULT_CODEC` | codec ID | `h264` | Reserved codec default. The current encoder is explicitly `libx264` with MP4 output; changing only this variable has no effect yet. |
+| `OHIC_ENABLE_REALBASICVSR` | boolean | `true` | Registers the experimental `realbasicvsr-x4-experimental` engine in `/api/models` and the UI. Set `false` and restart to expose only Real-ESRGAN. This does not delete cached weights or prior job records. |
 | `OHIC_LOG_LEVEL` | log level | `INFO` | Python/structlog filtering. Typical values are `DEBUG`, `INFO`, `WARNING`, `ERROR`, and `CRITICAL`. Unknown values fall back to `INFO`. Logs are JSON after application startup. |
 
 The settings model ignores unknown environment fields. Directories are created during settings
@@ -389,9 +390,11 @@ reduces peak memory; the x264 preset/CRF also makes Maximum slower and larger th
 
 ### Model selection
 
-`model_id` defaults to `realesrgan-x2plus`. The registry rejects unknown IDs. The interpolation
-adapter `lanczos-test` is instantiated only by explicit test/benchmark registries and is not
-available through the production API.
+`model_id` defaults to `realesrgan-x2plus`. The registry rejects unknown IDs. When
+`OHIC_ENABLE_REALBASICVSR=true`, `realbasicvsr-x4-experimental` is also available for preview and
+full/range jobs. Its capability metadata rejects stream jobs and inputs above 1280×720 before the
+job enters the queue. The interpolation adapter `lanczos-test` is instantiated only by explicit
+test/benchmark registries and is not available through the production API.
 
 ## Architecture and data flow
 
@@ -404,7 +407,7 @@ flowchart LR
   API --> Jobs["Single-worker job manager"]
   Jobs --> Probe["FFprobe metadata"]
   Jobs --> Decode["FFmpeg RGB decoder"]
-  Decode --> AI["Tiled Real-ESRGAN ×2"]
+  Decode --> AI["Selected frame or temporal engine"]
   AI --> Encode["FFmpeg H.264 encoder"]
   Encode --> Mux["AAC audio mux + fast-start MP4"]
   Mux --> FS
@@ -474,7 +477,7 @@ Interactive schemas are always available at `/docs`. All application routes are 
 | Method | Path | Purpose | Success |
 | --- | --- | --- | --- |
 | `GET` | `/api/health` | FFmpeg/FFprobe status and detected hardware | 200 |
-| `GET` | `/api/models` | Production model metadata | 200 |
+| `GET` | `/api/models` | Enabled engine metadata and capabilities | 200 |
 | `POST` | `/api/videos/upload` | Multipart video ingestion (`file`) | 200 |
 | `GET` | `/api/videos/{video_id}` | Persisted source record | 200 |
 | `GET` | `/api/videos/{video_id}/media` | Local source media | 200 |
@@ -614,10 +617,17 @@ status is `queued`, `downloading`, `enhancing`, `complete`, `failed`, `cancelled
 
 The weight manager reuses an existing file larger than 1,000,000 bytes. Otherwise it streams the
 official GitHub Release with a 120-second HTTP timeout into a `.part` file, verifies a minimum
-size, and atomically replaces the destination. Model loading looks for `params_ema`, then `params`,
-then the checkpoint root, and performs strict state-dict validation. A validation failure deletes
-the cached checkpoint so the next job downloads it again. CUDA uses FP16 inference; MPS and CPU
-use FP32.
+size and an optional model-specific SHA-256, and atomically replaces the destination. Model
+loading looks for `params_ema`, then `params`, then the checkpoint root, and performs strict
+state-dict validation. A validation failure deletes the cached checkpoint so the next job
+downloads it again. CUDA uses FP16 inference; MPS and CPU use FP32.
+
+The `experiment/realbasicvsr` branch also registers a sequence-oriented RealBasicVSR ×4 engine
+behind `OHIC_ENABLE_REALBASICVSR`. It uses a separate bounded temporal-window pipeline for preview
+and full/range jobs, because forcing temporal inference through the one-frame contract would remove
+the information under evaluation. Installation, verified device status, window strategy,
+checkpoint/license details, limitations, and comparison commands are documented in
+[the RealBasicVSR experiment](docs/realbasicvsr-experiment.md).
 
 ### Preview/full frame path
 
@@ -1096,6 +1106,7 @@ and test existing databases before introducing required fields or enum values.
 - [Consumer README](README.md)
 - [Architecture notes](docs/architecture.md)
 - [Model evaluation](docs/model-evaluation.md)
+- [RealBasicVSR experiment](docs/realbasicvsr-experiment.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)
 - [MIT license](LICENSE)
 

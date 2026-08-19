@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, API_URL } from "./lib/api";
 import type {
+  EnhancementModel,
   Health,
   JobKind,
   JobRecord,
@@ -23,8 +24,23 @@ import { SourcePicker } from "./components/SourcePicker";
 import { StorageDrawer } from "./components/StorageDrawer";
 import { PlaylistDrawer } from "./components/PlaylistDrawer";
 
+const FALLBACK_MODELS: EnhancementModel[] = [{
+  identifier: "realesrgan-x2plus",
+  display_name: "Real-ESRGAN ×2",
+  scale_factors: [2],
+  supported_devices: ["mps", "cuda", "cpu"],
+  weights: ["RealESRGAN_x2plus.pth"],
+  license: "BSD-3-Clause",
+  source_url: "https://github.com/xinntao/Real-ESRGAN",
+  description: "Fast frame-based enhancement",
+  experimental: false,
+  temporal: false,
+  supports_stream: true,
+}];
+
 export function OhIcApp() {
   const [health, setHealth] = useState<Health | null>(null);
+  const [models, setModels] = useState<EnhancementModel[]>(FALLBACK_MODELS);
   const [video, setVideo] = useState<VideoRecord | null>(null);
   const [job, setJob] = useState<JobRecord | null>(null);
   const [comparison, setComparison] = useState<JobRecord | null>(null);
@@ -52,6 +68,7 @@ export function OhIcApp() {
 
   useEffect(() => {
     void api.health().then(setHealth).catch(() => setError("OhIc's local engine is not running. Start the backend, then refresh this page."));
+    void api.models().then(setModels).catch(() => undefined);
     void api.history().then(setHistory).catch(() => undefined);
     void api.playlists().then(setPlaylists).catch(() => undefined);
   }, [refreshHistory]);
@@ -132,6 +149,7 @@ export function OhIcApp() {
     kind: JobKind,
     target: ResolutionTarget,
     preset: QualityPreset,
+    modelId: string,
     timestamp: number,
     trimStart: number,
     trimEnd?: number,
@@ -146,6 +164,7 @@ export function OhIcApp() {
         target_width: target.width,
         target_height: target.height,
         preset,
+        model_id: modelId,
         preview_timestamp: timestamp,
         trim_start: trimStart,
         trim_end: trimEnd,
@@ -311,7 +330,7 @@ export function OhIcApp() {
             <span>{video.source_type === "youtube" ? "YouTube source" : "Uploaded source"}</span>
           </div>
           {job && !["complete", "failed", "cancelled"].includes(job.status) && <ProgressPanel job={job} onCancel={() => void cancel()} />}
-          <EnhancementWorkspace key={`${video.id}:${job?.id ?? "new"}`} video={video} initialJob={job} busy={busy} onRun={(...args) => void runJob(...args)} />
+          <EnhancementWorkspace key={`${video.id}:${job?.id ?? "new"}`} video={video} models={models} initialJob={job} busy={busy} onRun={(...args) => void runJob(...args)} />
         </div>
       )}
 

@@ -3,18 +3,20 @@
 /* eslint-disable jsx-a11y/media-has-caption */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { JobKind, JobRecord, QualityPreset, ResolutionTarget, VideoRecord } from "../lib/types";
+import type { EnhancementModel, JobKind, JobRecord, QualityPreset, ResolutionTarget, VideoRecord } from "../lib/types";
 import { ChevronIcon, PlayIcon, SparkIcon } from "./Icons";
 import { mediaUrl } from "../lib/api";
 
 type Props = {
   video: VideoRecord;
+  models: EnhancementModel[];
   initialJob?: JobRecord | null;
   busy: boolean;
   onRun: (
     kind: JobKind,
     target: ResolutionTarget,
     preset: QualityPreset,
+    modelId: string,
     timestamp: number,
     trimStart: number,
     trimEnd?: number,
@@ -38,7 +40,7 @@ function formatBytes(bytes: number) {
   return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
 }
 
-export function EnhancementWorkspace({ video, initialJob, busy, onRun }: Props) {
+export function EnhancementWorkspace({ video, models, initialJob, busy, onRun }: Props) {
   const [selected, setSelected] = useState(
     video.targets.find(
       (target) =>
@@ -46,6 +48,7 @@ export function EnhancementWorkspace({ video, initialJob, busy, onRun }: Props) 
     ) ?? video.targets.find((target) => target.recommended) ?? video.targets[0],
   );
   const [preset, setPreset] = useState<QualityPreset>(initialJob?.preset ?? "balanced");
+  const [modelId, setModelId] = useState(initialJob?.model_id ?? "realesrgan-x2plus");
   const [timestamp, setTimestamp] = useState(
     initialJob?.preview_timestamp ?? Math.min(video.metadata.duration / 2, 30),
   );
@@ -55,6 +58,11 @@ export function EnhancementWorkspace({ video, initialJob, busy, onRun }: Props) 
   const [trimStart, setTrimStart] = useState(initialJob?.trim_start ?? 0);
   const [trimEnd, setTrimEnd] = useState(initialJob?.trim_end ?? video.metadata.duration);
   const playerRef = useRef<HTMLVideoElement>(null);
+  const selectedModel = models.find((model) => model.identifier === modelId) ?? models[0];
+  const modelUnavailable = Boolean(
+    selectedModel?.max_input_pixels
+      && video.metadata.width * video.metadata.height > selectedModel.max_input_pixels,
+  );
 
   useEffect(() => {
     const player = playerRef.current;
@@ -171,10 +179,40 @@ export function EnhancementWorkspace({ video, initialJob, busy, onRun }: Props) 
           </div>
         </section>
 
+        <section className="control-section">
+          <div className="section-label"><span>03</span><div><strong>AI engine</strong><small>Real-ESRGAN remains the default</small></div></div>
+          <div className="engine-options">
+            {models.map((model) => {
+              const unavailable = Boolean(
+                model.max_input_pixels
+                  && video.metadata.width * video.metadata.height > model.max_input_pixels,
+              );
+              return (
+                <button
+                  aria-pressed={modelId === model.identifier}
+                  className={modelId === model.identifier ? "selected" : ""}
+                  disabled={busy || unavailable}
+                  key={model.identifier}
+                  onClick={() => setModelId(model.identifier)}
+                >
+                  <span className="radio-dot" />
+                  <span className="engine-copy">
+                    <strong>{model.display_name}{model.experimental && <em>Experimental</em>}</strong>
+                    <small>{unavailable ? "Available for sources up to 720p" : model.description}</small>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {selectedModel?.temporal && !modelUnavailable && (
+            <p className="engine-warning">Uses adjacent frames for steadier restoration. Significantly slower, with experimental MPS support.</p>
+          )}
+        </section>
+
         <details className="advanced-settings">
           <summary>Advanced details <ChevronIcon size={16} /></summary>
           <div className="advanced-grid">
-            <span>AI model<strong>Real-ESRGAN ×2</strong></span>
+            <span>AI model<strong>{selectedModel?.display_name ?? "Real-ESRGAN ×2"}</strong></span>
             <span>Final resize<strong>Lanczos</strong></span>
             <span>Output<strong>H.264 · MP4</strong></span>
             <span>Workload<strong>{workload.level}</strong></span>
@@ -183,16 +221,16 @@ export function EnhancementWorkspace({ video, initialJob, busy, onRun }: Props) 
         </details>
 
         <div className="action-stack">
-          <button className="primary-action" disabled={busy} onClick={() => onRun("preview", selected, preset, timestamp, 0)}>
+          <button className="primary-action" disabled={busy || modelUnavailable} onClick={() => onRun("preview", selected, preset, selectedModel.identifier, timestamp, 0)}>
             <PlayIcon size={18} fill="currentColor" /> {busy ? "Preparing…" : "Preview enhancement"}
             <span>5 sec</span>
           </button>
-          <button className="secondary-action" disabled={busy} onClick={() => onRun("full", selected, preset, timestamp, customRange ? trimStart : 0, customRange ? trimEnd : undefined)}>
+          <button className="secondary-action" disabled={busy || modelUnavailable} onClick={() => onRun("full", selected, preset, selectedModel.identifier, timestamp, customRange ? trimStart : 0, customRange ? trimEnd : undefined)}>
             {customRange ? "Enhance selected range" : "Enhance full video"} <small>{workload.frames.toLocaleString()} frames</small>
           </button>
-          <button className="stream-action" disabled={busy} onClick={() => onRun("stream", selected, preset, timestamp, customRange ? trimStart : 0, customRange ? trimEnd : undefined)}>
+          <button className={`stream-action ${!selectedModel.supports_stream ? "unsupported" : ""}`} disabled={busy || modelUnavailable || !selectedModel.supports_stream} onClick={() => onRun("stream", selected, preset, selectedModel.identifier, timestamp, customRange ? trimStart : 0, customRange ? trimEnd : undefined)}>
             <span><PlayIcon size={15} fill="currentColor" /> Watch while enhancing</span>
-            <small>Plays in rolling parts as they finish</small>
+            <small>{selectedModel.supports_stream ? "Plays in rolling parts as they finish" : "Not available for this experimental engine"}</small>
           </button>
         </div>
         <p className="output-note">H.264 MP4 · source audio retained when available</p>

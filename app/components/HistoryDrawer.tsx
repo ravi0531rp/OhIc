@@ -13,6 +13,10 @@ type Props = {
 
 const ACTIVE = ["queued", "preparing", "processing", "encoding"];
 
+function modelLabel(modelId: string) {
+  return modelId.startsWith("realbasicvsr") ? "RealBasicVSR · Experimental" : "Real-ESRGAN";
+}
+
 export function HistoryDrawer({ jobs, open, onClose, onSelect, onCancel }: Props) {
   return (
     <>
@@ -32,7 +36,7 @@ export function HistoryDrawer({ jobs, open, onClose, onSelect, onCancel }: Props
               <div className="history-row" key={job.id}>
                 <button className="history-main" aria-label={`Open ${name}`} onClick={() => onSelect(job)}>
                   <span className={`job-status ${job.status}`} />
-                  <span><strong>{name}</strong><small>{job.target_width} × {job.target_height} · {job.preset} · {active ? job.progress.stage : job.status}</small></span>
+                  <span><strong>{name}</strong><small>{modelLabel(job.model_id)} · {job.target_width} × {job.target_height} · {job.preset} · {active ? job.progress.stage : job.status}</small></span>
                   <span className="history-meta"><time>{new Date(job.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</time><b>{active ? "View live" : job.status === "complete" ? "View result" : "Open"}</b></span>
                 </button>
                 {active && <button className="history-stop" aria-label="Stop job" title="Stop job" onClick={() => onCancel(job)}><StopIcon size={13} /> Stop</button>}

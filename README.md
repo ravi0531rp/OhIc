@@ -3,8 +3,8 @@
 **Restore, upscale, compare, and stream enhanced video.**
 
 OhIc is a free, open-source video enhancement workspace. Import a file or permitted YouTube video,
-choose the detail and output size, preview the result, and let Real-ESRGAN restore and upscale it
-frame by frame. The final result is a browser-friendly MP4 with source audio when available.
+choose the enhancement engine, detail, and output size, preview the result, and restore and upscale
+it locally. The final result is a browser-friendly MP4 with source audio when available.
 
 This README is for people using OhIc. If you are installing it for development, changing the
 code, integrating the API, or tuning its configuration, see the
@@ -28,6 +28,8 @@ code, integrating the API, or tuning its configuration, see the
 - Review resolution, frame rate, duration, file size, codec, aspect ratio, and SDR/HDR detection
   before processing.
 - Choose an aspect-safe recommended output such as 720p, 1080p, 1440p, or 4K.
+- Choose fast frame-by-frame Real-ESRGAN or experimental, temporally aware RealBasicVSR for
+  supported videos.
 - Pick **Fast**, **Balanced**, or **Maximum** quality.
 - Test the exact enhancement pipeline on a five-second preview.
 - Enhance the full video or save only a custom start-to-end range.
@@ -52,7 +54,7 @@ file locations—not copies of your video bytes.
 Network access is used only when you ask OhIc to:
 
 - inspect or download a YouTube video or playlist; or
-- download the official Real-ESRGAN model on the first enhancement.
+- download an official AI model the first time you select its engine.
 
 Use YouTube features only for videos you own or are permitted to download and process.
 
@@ -63,7 +65,8 @@ Use YouTube features only for videos you own or are permitted to download and pr
 - Python 3.11 or 3.12, managed through [uv](https://docs.astral.sh/uv/).
 - Node.js 22.13 or newer.
 - FFmpeg, including FFprobe.
-- At least about 500 MB for application dependencies and about 67 MB for the first AI model.
+- At least about 500 MB for application dependencies, plus roughly 67 MB for Real-ESRGAN or
+  141 MB for the optional RealBasicVSR checkpoint.
 - Enough free disk space for the imported source, temporary processing data, streaming parts, and
   final result. Long or high-resolution videos can require several times the source file size.
 
@@ -90,8 +93,8 @@ cd OhIc
 Open [http://localhost:3000](http://localhost:3000). Keep the Terminal window running while you
 use OhIc. Press `Control-C` in that window to stop it.
 
-The first enhancement downloads `RealESRGAN_x2plus.pth` from the official Real-ESRGAN release.
-The validated model is cached locally for later jobs.
+The first run with an engine downloads its official checkpoint. Validated models are cached
+locally for later jobs.
 
 For platform-specific setup, manual commands, Docker, or non-default ports, follow the
 [complete developer setup](DEVELOPER_README.md#setup-from-a-fresh-clone).
@@ -101,24 +104,32 @@ For platform-specific setup, manual commands, Docker, or non-default ports, foll
 1. Open OhIc and choose **Local file** or **YouTube**.
 2. Drop or browse to a local video. For YouTube, paste a single-video link, inspect it, confirm it
    is the correct video, and start the download.
-3. Review the detected source details and select an output resolution. OhIc marks a sensible
-   target as **Recommended** and always preserves the source aspect ratio.
-4. Choose a quality mode:
+3. Review the detected source details and choose an AI engine. **Real-ESRGAN ×2** is the reliable
+   default. **RealBasicVSR ×4** is an experimental temporal option for sources up to 720p; it can
+   reduce frame-to-frame flicker but needs substantially more memory and processing time.
+4. Select an output resolution. OhIc marks a sensible target as **Recommended** and always
+   preserves the source aspect ratio.
+5. Choose a quality mode:
 
    - **Fast** is best for quick checks and long videos.
    - **Balanced** is the recommended detail-to-time tradeoff.
    - **Maximum** uses the slowest, finest pass and the highest output quality setting.
 
-5. Move the preview marker to a representative moment and run the five-second preview.
-6. Inspect the preview in the comparison viewer. You can drag the before/after divider, switch to
+6. Move the preview marker to a representative moment and run the five-second preview.
+7. Inspect the preview in the comparison viewer. You can drag the before/after divider, switch to
    side by side, zoom, pause, and use the arrow keys or frame buttons.
-7. Return to the workspace and choose one of the full actions:
+8. Return to the workspace and choose one of the full actions:
 
    - **Enhance full video** waits for one complete downloadable result.
    - **Enhance selected range** processes and saves only your chosen timestamps.
    - **Watch while enhancing** starts playback as soon as the first enhanced part is ready.
 
-8. Download the completed MP4 from the result view.
+9. Download the completed MP4 from the result view.
+
+RealBasicVSR supports previews, complete videos, and custom timestamp ranges. It does not yet
+support **Watch while enhancing**, playlists, sources above 720p, or resuming a partially processed
+job after the backend stops. OhIc disables unsupported actions instead of silently switching the
+engine.
 
 ### Select only part of a video
 
@@ -199,14 +210,14 @@ By default, OhIc stores its working data in the repository's `data` folder.
 
 ## Understanding the result
 
-OhIc uses Real-ESRGAN to synthesize plausible visual detail and then sizes the frame exactly for
-the chosen output. It can make many low-resolution or compressed videos look clearer, but it
-cannot recover facts that are absent from the source. Do not treat reconstructed faces, text,
-license plates, or objects as forensic evidence.
+OhIc's AI engines synthesize plausible visual detail and then size the frame exactly for the chosen
+output. They can make many low-resolution or compressed videos look clearer, but cannot recover
+facts that are absent from the source. Do not treat reconstructed faces, text, license plates, or
+objects as forensic evidence.
 
-The current pipeline enhances frames independently. Difficult motion, film grain, flashing
-detail, or heavy compression can produce temporal shimmer. Always use a representative preview
-before committing to a long job.
+Real-ESRGAN enhances frames independently, so difficult motion, grain, flashing detail, or heavy
+compression can shimmer. RealBasicVSR considers nearby frames, but may instead produce motion
+smear, ghosting, or unstable detail. Always use a representative preview before a long job.
 
 ## Troubleshooting
 
@@ -274,7 +285,8 @@ inspection—are in the [developer troubleshooting guide](DEVELOPER_README.md#tr
   source metadata are not carried into the result.
 - HDR sources are detected, but enhancement currently passes through an 8-bit RGB pipeline and
   produces SDR output.
-- Real-ESRGAN ×2 is the only production model; other model backends are not selectable in the UI.
+- RealBasicVSR is experimental, limited to 720p input, and unavailable for playlists and
+  watch-while-enhancing.
 - Playlist imports are limited to the first 100 available entries and use each video's recommended
   resolution; per-item resolution and timestamp ranges are not currently configurable.
 - YouTube sign-in, cookies, and PO-token configuration are not exposed in the app.
@@ -288,6 +300,7 @@ inspection—are in the [developer troubleshooting guide](DEVELOPER_README.md#tr
   pipeline, persistence, tests, Docker, and contribution guide
 - [Architecture notes](docs/architecture.md)—short architectural overview
 - [Model evaluation](docs/model-evaluation.md)—why Real-ESRGAN ×2 was selected
+- [RealBasicVSR experiment](docs/realbasicvsr-experiment.md)—temporal engine status and limits
 - [Third-party notices](THIRD_PARTY_NOTICES.md)—upstream software and model licensing
 
 OhIc is licensed under the [MIT License](LICENSE). Third-party software and model weights retain
