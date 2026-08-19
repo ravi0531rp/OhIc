@@ -147,15 +147,23 @@ does not delete its local videos; use **Storage** for that.
 
 ## Watch while enhancing
 
-This mode divides the chosen full video or custom range into independently playable parts. The
-first part is the largest and is sized from the source bitrate and duration, output resolution,
-and selected quality mode. After that initial buffer, every later part is at most 20 seconds so
-OhIc can publish the remaining video in small increments.
+This mode divides the chosen full video or custom range into independently playable parts. For a
+selection of at least two minutes, the first part is two minutes. For a selection from one minute
+to under two minutes, the first part is one minute. Selections under one minute use five-second
+parts throughout. After any larger first part, every later part is at most five seconds.
 
 Each part becomes playable as soon as it finishes. OhIc advances to the next ready part
-automatically. If playback catches up with processing, it pauses at the part boundary and resumes
-when the next part is available. You can leave the viewer and reopen it from **History** without
-losing the rolling buffer. When all parts are ready, OhIc joins them into one downloadable MP4.
+automatically behind one continuous full-duration player and timeline; internal part boundaries are
+not exposed as separate videos. You can seek anywhere in the enhanced range that is already
+buffered. If playback catches up with processing, it pauses at the buffer edge and resumes when
+more video is available. You can leave the viewer and reopen it from **History** without losing the
+rolling buffer. When processing finishes, OhIc joins the internal parts into one downloadable MP4.
+
+<p align="center">
+  <img src="public/UI2.png" alt="OhIc watch-while-enhancing player showing a continuous video timeline, rolling buffer, and live enhancement progress" width="960">
+</p>
+
+<p align="center"><sub>Watch the enhanced portion on one continuous timeline while the ready buffer grows in the background.</sub></p>
 
 This design front-loads the main wait and reduces the chance of later pauses. It cannot make
 enhancement run in real time, so a demanding upscale can still reach a part boundary before the

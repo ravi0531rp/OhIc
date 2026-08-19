@@ -700,30 +700,20 @@ accept cookies, credentials, or token configuration in this release.
 
 ## Watch-while-enhancing implementation
 
-`build_stream_state()` computes independent parts for the selected range. Let:
+`build_stream_state()` computes independent parts from the selected range duration:
 
-- `source_pixels = source_width × source_height`
-- `target_pixels = target_width × target_height`
-- `upscale_work = max(1, target_pixels / source_pixels)`
-- `preset_work = 0.75` Fast, `1.0` Balanced, or `1.5` Maximum
-- `MB_per_minute = source_file_size_MiB / max(source_duration_minutes, 0.1)`
-- `decode_work = clamp(sqrt(max(1, MB_per_minute) / 30), 0.85, 1.35)`
-- `duration_work = 1.15` for selections over two hours, otherwise `1.0`
+| Selected duration | First part | Remaining parts |
+| --- | ---: | ---: |
+| At least 120 seconds | 120 seconds | 5 seconds maximum |
+| At least 60 but under 120 seconds | 60 seconds | 5 seconds maximum |
+| Under 60 seconds | 5 seconds maximum | 5 seconds maximum |
 
-Then:
-
-```text
-raw_seconds = 120 / sqrt(upscale_work × preset_work × decode_work × duration_work)
-initial_chunk_duration = clamp(round_to_nearest_15_seconds(raw_seconds), 30, 120)
-followup_chunk_duration = 20
-```
-
-The first part uses `initial_chunk_duration`, making it the largest planned part. Every remaining
-part uses `followup_chunk_duration`, with the final part shortened to the selected end. The
-persisted `StreamState.chunk_duration` is the 20-second follow-up maximum; the initial duration is
-represented by the first chunk's timestamps. This front-loads the playback buffer, then publishes
-small increments intended to reduce later boundary waits. Parts are enhanced sequentially through
-the normal full pipeline, including optional source audio, and stored as:
+The final part is shortened to the selected end when necessary. The persisted
+`StreamState.chunk_duration` is the five-second follow-up maximum; the initial duration is
+represented by the first chunk's timestamps. This front-loads the playback buffer for longer
+selections, then publishes small increments intended to reduce later boundary waits. Parts are
+enhanced sequentially through the normal full pipeline, including optional source audio, and
+stored as:
 
 ```text
 data/outputs/<job-id>-chunk-0000.mp4
@@ -731,10 +721,13 @@ data/outputs/<job-id>-chunk-0001.mp4
 ...
 ```
 
-Ready parts are range-capable `FileResponse` media endpoints. The UI advances between independent
-video elements. If a next part is not ready, it displays a boundary buffer and resumes once the
-persisted stream state marks that part ready. Finally, FFmpeg's concat demuxer joins ready files
-with stream copy into `<job-id>.mp4`; no additional video generation is required.
+Ready parts are range-capable `FileResponse` media endpoints. The UI presents them behind one
+custom full-duration player: it maps part-local playback time onto a global playhead, preloads the
+next ready source, supports seeking across the contiguous ready range, and swaps sources without
+exposing part numbers or five-second native timelines. If the playhead reaches the ready edge, the
+player pauses and resumes when the persisted stream state publishes more video. Once the final
+result is available, the same player uses the joined output. FFmpeg's concat demuxer creates that
+`<job-id>.mp4` with stream copy, so no additional video generation is required.
 
 Stream state—including each index, timestamps, state, progress, URL, ready count, and buffered
 seconds—is stored inside the job JSON, so the viewer can be reopened. The chunk files remain after

@@ -2,7 +2,6 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from math import sqrt
 
 import structlog
 
@@ -17,7 +16,6 @@ from app.schemas.job import (
     JobProgress,
     JobRecord,
     JobStatus,
-    QualityPreset,
     StreamChunk,
     StreamState,
 )
@@ -27,24 +25,15 @@ logger = structlog.get_logger()
 
 
 def build_stream_state(video: VideoRecord, request: JobCreate, trim_end: float) -> StreamState:
-    """Plan short independently playable parts without creating hundreds of tiny files."""
-    source_pixels = max(1, video.metadata.width * video.metadata.height)
-    target_pixels = request.target_width * request.target_height
-    upscale_work = max(1.0, target_pixels / source_pixels)
-    preset_work = {
-        QualityPreset.FAST: 0.75,
-        QualityPreset.BALANCED: 1.0,
-        QualityPreset.MAXIMUM: 1.5,
-    }[request.preset]
+    """Front-load the buffer, then publish short independently playable parts."""
     selected_duration = max(0.1, trim_end - request.trim_start)
-    megabytes_per_minute = (
-        video.metadata.file_size / (1024 * 1024) / max(video.metadata.duration / 60, 0.1)
-    )
-    decode_work = min(1.35, max(0.85, sqrt(max(1.0, megabytes_per_minute) / 30)))
-    duration_work = 1.15 if selected_duration > 2 * 60 * 60 else 1.0
-    raw_seconds = 120 / sqrt(upscale_work * preset_work * decode_work * duration_work)
-    initial_chunk_duration = float(min(120, max(30, round(raw_seconds / 15) * 15)))
-    followup_chunk_duration = 20.0
+    if selected_duration >= 120:
+        initial_chunk_duration = 120.0
+    elif selected_duration >= 60:
+        initial_chunk_duration = 60.0
+    else:
+        initial_chunk_duration = 5.0
+    followup_chunk_duration = 5.0
 
     chunks: list[StreamChunk] = []
     cursor = request.trim_start
