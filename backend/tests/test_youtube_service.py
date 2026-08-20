@@ -75,6 +75,36 @@ def test_forbidden_error_explains_all_retries_were_used():
     assert "PO token" in message
 
 
+def test_reliability_report_surfaces_runtime_and_optional_access(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr("app.services.youtube.shutil.which", lambda name: f"/bin/{name}")
+
+    class Completed:
+        stdout = "v22.0.0\n"
+
+    monkeypatch.setattr(
+        "app.services.youtube.subprocess.run", lambda *_args, **_kwargs: Completed()
+    )
+    monkeypatch.setattr("app.services.youtube.metadata.distributions", lambda: [])
+
+    report = YouTubeService(tmp_path).reliability_report()
+
+    assert report.status == "ready"
+    assert report.node_version == "v22.0.0"
+    assert report.yt_dlp_version
+    assert report.po_token_provider is False
+    assert any(check.id == "attestation" for check in report.checks)
+
+
+def test_youtube_error_has_machine_readable_recovery_details():
+    code, message, steps = YouTubeService._diagnose(
+        yt_dlp.utils.DownloadError("HTTP Error 403: Forbidden")
+    )
+
+    assert code == "youtube_attestation"
+    assert "rejected" in message
+    assert any("PO token" in step for step in steps)
+
+
 def test_playlist_inspection_returns_selectable_flat_items(monkeypatch, tmp_path: Path):
     options_seen: list[dict] = []
 

@@ -8,10 +8,12 @@ OhIc is split into a browser workspace and a localhost-only Python engine.
   JavaScript memory. It uses native video elements, REST APIs and an SSE job stream.
 - **API:** FastAPI with Pydantic request/response models, streaming multipart ingestion, safe
   media routes and polished client-safe errors.
-- **Persistence:** SQLite stores serialized typed job/video records and paths. Video bytes stay
-  in filesystem-managed UUID locations.
+- **Persistence:** SQLite stores serialized typed video, job, playlist, local-batch, preset, and
+  comparison records. Video bytes and durable checkpoint segments stay in managed filesystem
+  locations.
 - **Jobs:** a single-worker executor prevents concurrent jobs from exhausting local memory.
-  Each runtime owns a cancellation event and all child processes.
+  Each runtime owns pause/cancel events and all child processes. Resource plans bound tiles and
+  temporal windows using current memory pressure and the selected policy.
 - **Video:** FFprobe inspects streams. FFmpeg decodes RGB frames and encodes output progressively;
   audio is attached after the video stream completes.
 - **Inference:** a central registry exposes engine metadata and capabilities. Frame engines use
@@ -25,10 +27,10 @@ OhIc is split into a browser workspace and a localhost-only Python engine.
 3. Create a typed SQLite job and start its isolated runtime.
 4. Download and structurally validate official model weights on first use.
 5. Pipe frames from FFmpeg to the selected model without retaining the complete video.
-6. Process either one frame at a time in tiles or bounded overlapping temporal windows.
+6. Process either one frame at a time in adaptive tiles or bounded, scene-aware temporal windows.
 7. Pipe RGB output into a progressive H.264 encoder.
-8. Mux the source audio, use `-shortest`, add browser fast-start metadata, and atomically expose
-   the complete result through its stored job record.
+8. Mux compatible source tracks into MP4 or preserve every supported track in MKV and atomically
+   expose the complete result through its stored job record.
 9. Remove the job temp directory after success, error or cancellation.
 
 ## Extension points
@@ -42,6 +44,8 @@ in an engine adapter.
 
 ## Current durability model
 
-Source and completed-output metadata survive process restarts. A queued or in-process job is not
-resumed after a hard process stop in v0.1; adding recovery requires a startup reconciliation pass
-and resumable frame checkpoints.
+Startup reconciliation converts interrupted work to a resumable paused state. Full jobs split the
+selected range into durable segments and persist a settings signature, source fingerprint, segment
+status, and SHA-256. Resume verifies and reuses completed segments. Streaming jobs reuse ready
+parts; short previews restart safely. Playlist orchestration and standalone YouTube download
+progress are not yet independently resumed mid-download.

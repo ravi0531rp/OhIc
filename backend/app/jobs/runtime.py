@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 @dataclass
 class JobRuntime:
     cancel: threading.Event = field(default_factory=threading.Event)
+    pause: threading.Event = field(default_factory=threading.Event)
     processes: list[subprocess.Popen] = field(default_factory=list)
     lock: threading.RLock = field(default_factory=threading.RLock)
 
@@ -19,6 +20,11 @@ class JobRuntime:
                 self.processes.remove(process)
 
     def stop(self) -> None:
+        self.cancel.set()
+        self.close_processes()
+
+    def request_pause(self) -> None:
+        self.pause.set()
         self.cancel.set()
         self.close_processes()
 

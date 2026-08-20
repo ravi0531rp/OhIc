@@ -4,6 +4,8 @@ from app.core.config import get_settings
 from app.inference.registry import ModelRegistry
 from app.jobs.manager import JobManager
 from app.models.database import Database
+from app.services.batches import BatchManager
+from app.services.comparisons import ComparisonManager
 from app.services.playlists import PlaylistManager
 from app.services.storage import StorageService
 from app.services.videos import VideoService
@@ -29,7 +31,8 @@ def get_video_service() -> VideoService:
 
 @lru_cache
 def get_youtube_service() -> YouTubeService:
-    return YouTubeService(get_settings().data_dir / "downloads")
+    settings = get_settings()
+    return YouTubeService(settings.data_dir / "downloads", settings.youtube_cookies_file)
 
 
 @lru_cache
@@ -47,6 +50,16 @@ def get_playlist_manager() -> PlaylistManager:
     return PlaylistManager(
         get_database(), get_youtube_service(), get_video_service(), get_job_manager()
     )
+
+
+@lru_cache
+def get_batch_manager() -> BatchManager:
+    return BatchManager(get_database(), get_job_manager())
+
+
+@lru_cache
+def get_comparison_manager() -> ComparisonManager:
+    return ComparisonManager(get_database(), get_job_manager())
 
 
 @lru_cache

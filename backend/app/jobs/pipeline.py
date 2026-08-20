@@ -1,3 +1,4 @@
+import hashlib
 import shutil
 import subprocess
 import time
@@ -15,6 +16,8 @@ from app.inference.realbasicvsr.engine import (
 from app.inference.realbasicvsr.video_pipeline import run_experimental_pipeline
 from app.jobs.runtime import JobRuntime
 from app.schemas.job import (
+    CheckpointSegmentStatus,
+    JobCheckpoint,
     JobKind,
     JobProgress,
     JobRecord,
@@ -26,6 +29,7 @@ from app.schemas.video import VideoRecord
 
 ProgressSink = Callable[[JobProgress], None]
 StreamProgressSink = Callable[[StreamState], None]
+CheckpointProgressSink = Callable[[JobCheckpoint], None]
 
 
 def _preset_config(preset: QualityPreset, device: str) -> tuple[int, str, int]:
@@ -46,6 +50,50 @@ def _run_checked(args: list[str], runtime: JobRuntime, error_message: str) -> No
     if process.returncode != 0:
         detail = stderr.decode(errors="replace")[-1200:] if stderr else ""
         raise RuntimeError(f"{error_message} {detail}".strip())
+
+
+def _job_output(outputs_dir: Path, job: JobRecord) -> Path:
+    return outputs_dir / f"{job.id}.{job.output_container.value}"
+
+
+def _scan_processing(job: JobRecord, video: VideoRecord) -> tuple[str | None, float]:
+    source_fps = video.metadata.fps or 30.0
+    interlaced = video.metadata.field_order not in {"progressive", "unknown", ""}
+    if job.scan_treatment.value == "ivtc":
+        return "fieldmatch,bwdif=deint=interlaced,decimate", source_fps * 0.8
+    if job.scan_treatment.value == "deinterlace" or (
+        job.scan_treatment.value == "auto" and interlaced
+    ):
+        return "bwdif=mode=send_frame:parity=auto:deint=all", source_fps
+    return None, source_fps
+
+
+def _mux_source_tracks(
+    enhanced_video: Path,
+    source: Path,
+    output: Path,
+    job: JobRecord,
+    runtime: JobRuntime,
+    start_at: float,
+    duration: float | None,
+) -> None:
+    args = ["ffmpeg", "-y", "-v", "error", "-i", str(enhanced_video)]
+    if start_at:
+        args += ["-ss", f"{start_at:.3f}"]
+    if duration:
+        args += ["-t", f"{duration:.3f}"]
+    args += ["-i", str(source), "-map", "0:v:0", "-map", "1:a?"]
+    if job.output_container.value == "mkv" and job.track_policy.value == "preserve":
+        args += ["-map", "1:s?", "-map", "1:d?", "-map", "1:t?", "-c", "copy"]
+    else:
+        args += ["-c:v", "copy", "-c:a", "aac", "-b:a", "192k"]
+    args += ["-map_metadata", "1" if job.preserve_metadata else "-1"]
+    args += ["-map_chapters", "1" if job.preserve_chapters else "-1"]
+    args += ["-shortest"]
+    if job.output_container.value == "mp4":
+        args += ["-movflags", "+faststart"]
+    args.append(str(output))
+    _run_checked(args, runtime, "Source audio and media tracks could not be preserved.")
 
 
 def _read_frame(pipe, frame_bytes: int) -> bytes:
@@ -74,7 +122,7 @@ def run_pipeline(
     workdir.mkdir(parents=True, exist_ok=True)
     source = Path(video.path)
     video_only = workdir / "enhanced-video.mp4"
-    output = outputs_dir / f"{job.id}.mp4"
+    output = _job_output(outputs_dir, job)
     if job.kind == JobKind.PREVIEW:
         duration = min(5.0, max(0.1, video.metadata.duration))
         start_at = min(
@@ -93,11 +141,14 @@ def run_pipeline(
         else None
     )
     total_frames = (
-        max(1, round((duration or video.metadata.duration) * video.metadata.fps))
+        max(1, round((duration or video.metadata.duration) * _scan_processing(job, video)[1]))
         if video.metadata.fps
         else video.metadata.frame_count
     )
+    scan_filter, output_fps = _scan_processing(job, video)
     tile_size, encoder_preset, crf = _preset_config(job.preset, device)
+    if job.resource_allocation:
+        tile_size = min(tile_size, job.resource_allocation.tile_size)
     log_path = workdir / "ffmpeg.log"
     try:
         progress(JobProgress(stage="Preparing video", percent=2, frames_total=total_frames))
@@ -149,6 +200,8 @@ def run_pipeline(
         decode_args += ["-i", str(source)]
         if duration:
             decode_args += ["-t", f"{duration:.3f}"]
+        if scan_filter:
+            decode_args += ["-vf", scan_filter]
         decode_args += ["-map", "0:v:0", "-an", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"]
         decode_log = log_path.open("wb")
         decoder = subprocess.Popen(decode_args, stdout=subprocess.PIPE, stderr=decode_log)
@@ -164,7 +217,7 @@ def run_pipeline(
             "-s",
             f"{job.target_width}x{job.target_height}",
             "-r",
-            f"{video.metadata.fps or 30}",
+            f"{output_fps:g}",
             "-i",
             "pipe:0",
             "-an",
@@ -256,30 +309,7 @@ def run_pipeline(
                 stage="Adding audio", percent=94, frames_done=frames_done, frames_total=total_frames
             )
         )
-        mux_args = ["ffmpeg", "-y", "-v", "error", "-i", str(video_only)]
-        if start_at:
-            mux_args += ["-ss", f"{start_at:.3f}"]
-        if duration:
-            mux_args += ["-t", f"{duration:.3f}"]
-        mux_args += [
-            "-i",
-            str(source),
-            "-map",
-            "0:v:0",
-            "-map",
-            "1:a:0?",
-            "-c:v",
-            "copy",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            "-shortest",
-            "-movflags",
-            "+faststart",
-            str(output),
-        ]
-        _run_checked(mux_args, runtime, "Audio could not be added to the enhanced video.")
+        _mux_source_tracks(video_only, source, output, job, runtime, start_at, duration)
         progress(
             JobProgress(
                 stage="Finalizing", percent=99, frames_done=frames_done, frames_total=total_frames
@@ -308,7 +338,8 @@ def run_realbasicvsr_pipeline(
 ) -> tuple[Path, Path | None, float]:
     """Run preview/full jobs through the temporal RealBasicVSR engine."""
     source = Path(video.path)
-    output = outputs_dir / f"{job.id}.mp4"
+    output = _job_output(outputs_dir, job)
+    restored_base = outputs_dir / f"{job.id}-restored-base.mp4"
     if job.kind == JobKind.PREVIEW:
         selected_duration = min(5.0, max(0.1, video.metadata.duration))
         start_at = min(
@@ -427,10 +458,11 @@ def run_realbasicvsr_pipeline(
             )
 
         load(device)
+        scan_filter, output_fps = _scan_processing(job, video)
         try:
             stats = run_experimental_pipeline(
                 source,
-                output,
+                restored_base,
                 engine,
                 runtime=runtime,
                 progress=update,
@@ -439,6 +471,15 @@ def run_realbasicvsr_pipeline(
                 start_at=start_at,
                 duration=duration,
                 temp_root=temp_root,
+                input_filter=scan_filter,
+                output_fps=output_fps,
+                window_frames=(
+                    job.resource_allocation.temporal_window
+                    if job.resource_allocation
+                    else None
+                ),
+                scene_aware=job.scene_aware,
+                scene_threshold=job.scene_threshold,
             )
         except RuntimeError as error:
             if device != "mps" or not is_mps_runtime_failure(error):
@@ -455,7 +496,7 @@ def run_realbasicvsr_pipeline(
             load("cpu")
             stats = run_experimental_pipeline(
                 source,
-                output,
+                restored_base,
                 engine,
                 runtime=runtime,
                 progress=update,
@@ -464,16 +505,221 @@ def run_realbasicvsr_pipeline(
                 start_at=start_at,
                 duration=duration,
                 temp_root=temp_root,
+                input_filter=scan_filter,
+                output_fps=output_fps,
+                window_frames=(
+                    job.resource_allocation.temporal_window
+                    if job.resource_allocation
+                    else None
+                ),
+                scene_aware=job.scene_aware,
+                scene_threshold=job.scene_threshold,
             )
+        _mux_source_tracks(
+            restored_base,
+            source,
+            output,
+            job,
+            runtime,
+            start_at,
+            selected_duration if duration is not None else None,
+        )
+        restored_base.unlink(missing_ok=True)
         return output, original, max(stats.total_seconds, time.monotonic() - started)
     except Exception:
         output.unlink(missing_ok=True)
+        restored_base.unlink(missing_ok=True)
         if original:
             original.unlink(missing_ok=True)
         raise
     finally:
         engine.unload()
         runtime.close_processes()
+
+
+def _file_checksum(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _concat_parts(
+    paths: list[Path], destination: Path, workdir: Path, runtime: JobRuntime
+) -> None:
+    manifest = workdir / f"{destination.stem}-parts.txt"
+    manifest.write_text(
+        "".join(f"file '{path.resolve().as_posix()}'\n" for path in paths),
+        encoding="utf-8",
+    )
+    _run_checked(
+        [
+            "ffmpeg",
+            "-y",
+            "-v",
+            "error",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(manifest),
+            "-c",
+            "copy",
+            "-movflags",
+            "+faststart",
+            str(destination),
+        ],
+        runtime,
+        "The completed enhancement checkpoints could not be joined.",
+    )
+
+
+def run_checkpointed_pipeline(
+    job: JobRecord,
+    video: VideoRecord,
+    model: VideoEnhancementModel | RealBasicVSREngine,
+    model_dir: Path,
+    outputs_dir: Path,
+    temp_root: Path,
+    device: str,
+    runtime: JobRuntime,
+    progress: ProgressSink,
+    checkpoint_progress: CheckpointProgressSink,
+) -> tuple[Path, Path | None, float]:
+    """Enhance durable ranges and reuse verified ranges after a pause or restart."""
+    if not job.checkpoint or not job.checkpoint.segments:
+        raise RuntimeError("This job has no resume checkpoint plan.")
+    started = time.monotonic()
+    checkpoint = job.checkpoint.model_copy(deep=True)
+    workdir = temp_root / f"{job.id}-checkpoint"
+    workdir.mkdir(parents=True, exist_ok=True)
+    output = _job_output(outputs_dir, job)
+    selected_duration = sum(segment.end - segment.start for segment in checkpoint.segments)
+    total_frames = max(1, round(selected_duration * (video.metadata.fps or 30)))
+    completed_frames = 0
+    ready_paths: list[Path] = []
+    original_paths: list[Path] = []
+
+    try:
+        for segment in checkpoint.segments:
+            segment_path = outputs_dir / segment.output_name
+            original_path = outputs_dir / f"{segment_path.stem}-original.mp4"
+            valid = (
+                segment.status == CheckpointSegmentStatus.READY
+                and segment_path.exists()
+                and segment.checksum == _file_checksum(segment_path)
+            )
+            segment_frames = max(
+                1, round((segment.end - segment.start) * (video.metadata.fps or 30))
+            )
+            if valid:
+                ready_paths.append(segment_path)
+                if original_path.exists():
+                    original_paths.append(original_path)
+                completed_frames += segment_frames
+                continue
+            segment.status = CheckpointSegmentStatus.PROCESSING
+            segment.progress = 0
+            segment.checksum = None
+            checkpoint_progress(checkpoint.model_copy(deep=True))
+
+            child = job.model_copy(deep=True)
+            child.id = segment_path.stem
+            child.kind = JobKind.FULL
+            child.trim_start = segment.start
+            child.trim_end = segment.end
+            child.stream = None
+            child.checkpoint = None
+
+            def update_segment(
+                value: JobProgress,
+                current=segment,
+                planned_frames=segment_frames,
+                base_frames=completed_frames,
+            ) -> None:
+                current.progress = min(99, value.percent)
+                checkpoint_progress(checkpoint.model_copy(deep=True))
+                current_frames = min(planned_frames, value.frames_done)
+                overall_frames = base_frames + current_frames
+                progress(
+                    JobProgress(
+                        stage=(
+                            f"Checkpoint {current.index + 1} of "
+                            f"{len(checkpoint.segments)} · {value.stage}"
+                        ),
+                        percent=min(98, overall_frames / total_frames * 98),
+                        frames_done=overall_frames,
+                        frames_total=total_frames,
+                        processing_fps=value.processing_fps,
+                        elapsed_seconds=time.monotonic() - started,
+                        eta_seconds=(
+                            (total_frames - overall_frames) / value.processing_fps
+                            if value.processing_fps
+                            else None
+                        ),
+                        detail="Completed checkpoints are saved locally and will be reused.",
+                    )
+                )
+
+            if isinstance(model, RealBasicVSREngine):
+                segment_output, segment_original, _ = run_realbasicvsr_pipeline(
+                    child,
+                    video,
+                    model,
+                    model_dir,
+                    outputs_dir,
+                    temp_root,
+                    runtime,
+                    update_segment,
+                )
+            else:
+                segment_output, segment_original, _ = run_pipeline(
+                    child,
+                    video,
+                    model,
+                    model_dir,
+                    outputs_dir,
+                    temp_root,
+                    device,
+                    runtime,
+                    update_segment,
+                )
+            segment.status = CheckpointSegmentStatus.READY
+            segment.progress = 100
+            segment.checksum = _file_checksum(segment_output)
+            ready_paths.append(segment_output)
+            if segment_original:
+                original_paths.append(segment_original)
+            completed_frames += segment_frames
+            checkpoint_progress(checkpoint.model_copy(deep=True))
+
+        progress(
+            JobProgress(
+                stage="Joining saved checkpoints",
+                percent=99,
+                frames_done=total_frames,
+                frames_total=total_frames,
+                elapsed_seconds=time.monotonic() - started,
+            )
+        )
+        _concat_parts(ready_paths, output, workdir, runtime)
+        is_trimmed = job.trim_start > 0.001 or (
+            job.trim_end is not None
+            and job.trim_end < video.metadata.duration - 0.001
+        )
+        original = outputs_dir / f"{job.id}-original.mp4" if is_trimmed else None
+        if original and len(original_paths) == len(ready_paths):
+            _concat_parts(original_paths, original, workdir, runtime)
+        elif original:
+            original = None
+        return output, original, time.monotonic() - started
+    except Exception:
+        output.unlink(missing_ok=True)
+        raise
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 def run_streaming_pipeline(
@@ -494,17 +740,37 @@ def run_streaming_pipeline(
     stream = job.stream.model_copy(deep=True)
     stream_workdir = temp_root / f"{job.id}-stream"
     stream_workdir.mkdir(parents=True, exist_ok=True)
-    output = outputs_dir / f"{job.id}.mp4"
+    output = _job_output(outputs_dir, job)
     selected_duration = sum(chunk.end - chunk.start for chunk in stream.chunks)
     total_frames = max(1, round(selected_duration * (video.metadata.fps or 30)))
     completed_frames = 0
     ready_paths: list[Path] = []
     active_index: int | None = None
 
+    stream.ready_chunks = 0
+    stream.buffered_seconds = 0
+    for saved_chunk in stream.chunks:
+        saved_path = outputs_dir / f"{job.id}-chunk-{saved_chunk.index:04d}.mp4"
+        if saved_chunk.status == StreamChunkStatus.READY and saved_path.exists():
+            ready_paths.append(saved_path)
+            stream.ready_chunks += 1
+            stream.buffered_seconds += saved_chunk.end - saved_chunk.start
+            completed_frames += max(
+                1, round((saved_chunk.end - saved_chunk.start) * (video.metadata.fps or 30))
+            )
+        elif saved_chunk.status != StreamChunkStatus.QUEUED:
+            saved_chunk.status = StreamChunkStatus.QUEUED
+            saved_chunk.progress = 0
+            saved_chunk.playback_url = None
+    stream_progress(stream.model_copy(deep=True))
+
     try:
         for chunk in stream.chunks:
             if runtime.cancel.is_set():
                 raise InterruptedError("Enhancement cancelled")
+            chunk_path = outputs_dir / f"{job.id}-chunk-{chunk.index:04d}.mp4"
+            if chunk.status == StreamChunkStatus.READY and chunk_path.exists():
+                continue
             active_index = chunk.index
             chunk.status = StreamChunkStatus.PROCESSING
             chunk.progress = 0
@@ -633,7 +899,12 @@ def run_streaming_pipeline(
         return output, None, time.monotonic() - started
     except InterruptedError:
         if active_index is not None:
-            stream.chunks[active_index].status = StreamChunkStatus.CANCELLED
+            stream.chunks[active_index].status = (
+                StreamChunkStatus.QUEUED
+                if runtime.pause.is_set()
+                else StreamChunkStatus.CANCELLED
+            )
+            stream.chunks[active_index].progress = 0
             stream_progress(stream.model_copy(deep=True))
         output.unlink(missing_ok=True)
         raise

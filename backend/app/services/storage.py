@@ -12,6 +12,7 @@ ACTIVE_STATUSES = {
     JobStatus.PREPARING,
     JobStatus.PROCESSING,
     JobStatus.ENCODING,
+    JobStatus.PAUSED,
 }
 
 
@@ -49,7 +50,8 @@ class StorageService:
             )
         for job in self.database.list_jobs(10000):
             chunks = list(self.outputs_dir.glob(f"{job.id}-chunk-*.mp4"))
-            if not job.output_path and not chunks:
+            checkpoints = list(self.outputs_dir.glob(f"{job.id}-checkpoint-*.*"))
+            if not job.output_path and not chunks and not checkpoints:
                 continue
             output = Path(job.output_path) if job.output_path else None
             original = self.outputs_dir / f"{job.id}-original.mp4"
@@ -66,7 +68,7 @@ class StorageService:
                     ),
                     size=(self._size(output) if output else 0) + self._size(original) + sum(
                         self._size(chunk) for chunk in chunks
-                    ),
+                    ) + sum(self._size(item) for item in checkpoints),
                     created_at=job.created_at,
                     detail=f"{job.target_width} × {job.target_height} · {job.preset.value}",
                     active=job.status in ACTIVE_STATUSES,
@@ -115,6 +117,10 @@ class StorageService:
             paths.extend(
                 ensure_within(chunk, self.outputs_dir)
                 for chunk in self.outputs_dir.glob(f"{job.id}-chunk-*.mp4")
+            )
+            paths.extend(
+                ensure_within(item, self.outputs_dir)
+                for item in self.outputs_dir.glob(f"{job.id}-checkpoint-*.*")
             )
         for video in videos:
             paths.append(ensure_within(Path(video.path), self.settings.data_dir))

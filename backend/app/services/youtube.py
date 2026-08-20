@@ -1,5 +1,8 @@
+import shutil
+import subprocess
 import uuid
 from collections.abc import Callable
+from importlib import metadata
 from pathlib import Path
 from time import monotonic
 
@@ -7,14 +10,26 @@ import structlog
 import yt_dlp
 
 from app.schemas.playlist import PlaylistInspectItem, PlaylistMetadata
-from app.schemas.video import YouTubeMetadata
+from app.schemas.video import (
+    YouTubeMetadata,
+    YouTubeReliabilityCheck,
+    YouTubeReliabilityReport,
+)
 from app.utils.files import safe_stem, validate_youtube_url
 
 logger = structlog.get_logger()
 
 
 class YouTubeError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        code: str = "unknown",
+        recovery_steps: list[str] | None = None,
+    ):
+        super().__init__(message)
+        self.code = code
+        self.recovery_steps = recovery_steps or []
 
 
 class YouTubeDownloadCancelled(InterruptedError):
@@ -26,24 +41,117 @@ class YouTubeDownloadStalled(RuntimeError):
 
 
 class YouTubeService:
-    def __init__(self, downloads_dir: Path):
+    def __init__(self, downloads_dir: Path, cookies_file: Path | None = None):
         self.downloads_dir = downloads_dir
+        self.cookies_file = cookies_file
+
+    @staticmethod
+    def _diagnose(exc: Exception) -> tuple[str, str, list[str]]:
+        text = str(exc).lower()
+        if "403" in text or "forbidden" in text or "po token" in text:
+            return (
+                "youtube_attestation",
+                "YouTube rejected every available playback format.",
+                [
+                    "Update yt-dlp and retry.",
+                    "Install a supported PO token provider for restricted playback formats.",
+                    "For videos requiring an account, configure a dedicated cookies file.",
+                ],
+            )
+        if "private" in text or "sign in" in text or "login" in text:
+            return (
+                "authentication_required",
+                "This video is private, age-restricted, or requires sign-in.",
+                ["Configure a cookies file for an account permitted to view this video."],
+            )
+        if "geo" in text or "country" in text or "region" in text:
+            return (
+                "region_restricted",
+                "This YouTube video is not available in your region.",
+                ["Use a source that is available in your current region."],
+            )
+        if "429" in text or "rate" in text or "try again later" in text:
+            return (
+                "rate_limited",
+                "YouTube temporarily rate-limited this connection.",
+                ["Wait several minutes before retrying.", "Avoid starting many imports at once."],
+            )
+        if "unavailable" in text or "removed" in text:
+            return (
+                "unavailable",
+                "This YouTube video is unavailable or has been removed.",
+                ["Check the URL and confirm that the video still plays on YouTube."],
+            )
+        return (
+            "extractor_failure",
+            "YouTube could not provide this video.",
+            ["Run the Reliability Center check, update yt-dlp, and retry."],
+        )
 
     @staticmethod
     def _message(exc: Exception) -> str:
-        text = str(exc).lower()
-        if "403" in text or "forbidden" in text:
-            return (
-                "YouTube rejected every available playback format. This video may require "
-                "sign-in, a PO token, or a newer yt-dlp release."
+        _code, message, steps = YouTubeService._diagnose(exc)
+        return f"{message} {' '.join(steps)}" if steps else message
+
+    def reliability_report(self) -> YouTubeReliabilityReport:
+        node = shutil.which("node")
+        node_version: str | None = None
+        if node:
+            try:
+                node_version = subprocess.run(
+                    [node, "--version"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                ).stdout.strip()
+            except (OSError, subprocess.SubprocessError):
+                node_version = None
+        distributions = {item.metadata["Name"].lower() for item in metadata.distributions()}
+        po_provider = any("pot" in name and "yt" in name for name in distributions)
+        cookies = bool(self.cookies_file and self.cookies_file.is_file())
+        checks = [
+            YouTubeReliabilityCheck(
+                id="extractor",
+                label="YouTube extractor",
+                status="ready",
+                detail=f"yt-dlp {yt_dlp.version.__version__}",
+            ),
+            YouTubeReliabilityCheck(
+                id="javascript",
+                label="JavaScript challenge runtime",
+                status="ready" if node_version else "warning",
+                detail=node_version or "Node.js was not found",
+            ),
+            YouTubeReliabilityCheck(
+                id="attestation",
+                label="Restricted-format access",
+                status="ready" if po_provider or cookies else "optional",
+                detail=(
+                    "PO-token provider detected"
+                    if po_provider
+                    else "Cookies file configured"
+                    if cookies
+                    else "Public videos use automatic fallback clients"
+                ),
+            ),
+        ]
+        recommendations: list[str] = []
+        if not node_version:
+            recommendations.append("Install Node.js 20 or newer for YouTube challenge solving.")
+        if not po_provider:
+            recommendations.append(
+                "A PO-token provider is optional, but improves access when YouTube returns 403."
             )
-        if "private" in text:
-            return "This YouTube video is private or requires sign-in."
-        if "geo" in text or "country" in text:
-            return "This YouTube video is not available in your region."
-        if "unavailable" in text or "removed" in text:
-            return "This YouTube video is unavailable or has been removed."
-        return "YouTube could not provide this video. Updating yt-dlp may help."
+        return YouTubeReliabilityReport(
+            status="ready" if node_version else "degraded",
+            yt_dlp_version=yt_dlp.version.__version__,
+            node_version=node_version,
+            cookies_configured=cookies,
+            po_token_provider=po_provider,
+            checks=checks,
+            recommendations=recommendations,
+        )
 
     @staticmethod
     def _base_options() -> dict:
@@ -60,14 +168,21 @@ class YouTubeService:
             "socket_timeout": 15,
         }
 
+    def _options(self) -> dict:
+        options = self._base_options()
+        if self.cookies_file and self.cookies_file.is_file():
+            options["cookiefile"] = str(self.cookies_file)
+        return options
+
     def inspect(self, url: str) -> YouTubeMetadata:
         safe_url = validate_youtube_url(url)
-        options = {**self._base_options(), "skip_download": True}
+        options = {**self._options(), "skip_download": True}
         try:
             with yt_dlp.YoutubeDL(options) as client:
                 info = client.extract_info(safe_url, download=False)
         except yt_dlp.utils.DownloadError as exc:
-            raise YouTubeError(self._message(exc)) from exc
+            code, message, steps = self._diagnose(exc)
+            raise YouTubeError(message, code, steps) from exc
         if not info or info.get("_type") == "playlist":
             raise YouTubeError("Playlists are not supported yet. Paste a single video link.")
         return YouTubeMetadata(
@@ -84,7 +199,7 @@ class YouTubeService:
     def inspect_playlist(self, url: str) -> PlaylistMetadata:
         safe_url = validate_youtube_url(url)
         options = {
-            **self._base_options(),
+            **self._options(),
             "noplaylist": False,
             "extract_flat": "in_playlist",
             "playlistend": 100,
@@ -94,7 +209,8 @@ class YouTubeService:
             with yt_dlp.YoutubeDL(options) as client:
                 info = client.extract_info(safe_url, download=False)
         except yt_dlp.utils.DownloadError as exc:
-            raise YouTubeError(self._message(exc)) from exc
+            code, message, steps = self._diagnose(exc)
+            raise YouTubeError(message, code, steps) from exc
         if not info or info.get("_type") != "playlist":
             raise YouTubeError("This link is not a YouTube playlist.")
         items: list[PlaylistInspectItem] = []
@@ -184,7 +300,7 @@ class YouTubeService:
                     progress_hook(data)
 
             options = {
-                **self._base_options(),
+                **self._options(),
                 **strategy,
                 "merge_output_format": "mp4",
                 "outtmpl": template,
@@ -225,7 +341,8 @@ class YouTubeService:
                 raise YouTubeError(
                     "YouTube only offered a throttled stream. Please retry in a few minutes."
                 ) from last_error
-            raise YouTubeError(self._message(last_error)) from last_error
+            code, message, steps = self._diagnose(last_error)
+            raise YouTubeError(message, code, steps) from last_error
         candidates = list(self.downloads_dir.glob(f"{video_id}.*"))
         path = next((item for item in candidates if item.suffix.lower() == ".mp4"), prepared)
         if not path.exists():

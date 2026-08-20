@@ -22,6 +22,8 @@ type Props = {
   video: VideoRecord;
   onLeave: () => void;
   onCancel: () => void;
+  onPause: () => void;
+  onResume: () => void;
   onHistory: () => void;
 };
 
@@ -43,7 +45,7 @@ function displayStage(stage: string): string {
   return stage;
 }
 
-export function AsyncEnhancementViewer({ job, video, onLeave, onCancel, onHistory }: Props) {
+export function AsyncEnhancementViewer({ job, video, onLeave, onCancel, onPause, onResume, onHistory }: Props) {
   const playerRef = useRef<HTMLVideoElement>(null);
   const playerShellRef = useRef<HTMLDivElement>(null);
   const pendingSeekRef = useRef<number | null>(null);
@@ -217,7 +219,9 @@ export function AsyncEnhancementViewer({ job, video, onLeave, onCancel, onHistor
         <div className="async-title"><span className="eyebrow">Watch while enhancing</span><h1>{video.title ?? video.original_name}</h1></div>
         <div className="async-actions">
           <button onClick={onHistory}><HistoryIcon size={16} /> History</button>
-          {active ? <button className="async-stop" onClick={onCancel}><StopIcon size={14} /> Stop</button> : job.output_url ? <a href={mediaUrl(job.output_url)} download><DownloadIcon size={16} /> Download</a> : null}
+          {active && <button onClick={onPause}><PauseIcon size={14} /> Pause</button>}
+          {job.status === "paused" && <button onClick={onResume}><PlayIcon size={14} /> Resume</button>}
+          {(active || job.status === "paused") ? <button className="async-stop" onClick={onCancel}><StopIcon size={14} /> Stop</button> : job.output_url ? <a href={mediaUrl(job.output_url)} download><DownloadIcon size={16} /> Download</a> : null}
         </div>
       </header>
 

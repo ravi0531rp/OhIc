@@ -8,6 +8,7 @@ from app.core.config import Settings
 from app.models.database import Database
 from app.schemas.video import SourceType, VideoRecord
 from app.utils.files import validate_video_filename
+from app.video.diagnosis import diagnose_source
 from app.video.probe import probe_video
 from app.video.recommendations import recommend_targets
 
@@ -49,6 +50,7 @@ class VideoService:
             path=str(destination),
             metadata=metadata,
             targets=recommend_targets(metadata),
+            diagnosis=diagnose_source(metadata),
             created_at=datetime.now(UTC),
             playback_url=f"/api/videos/{video_id}/media",
         )
@@ -72,11 +74,19 @@ class VideoService:
             path=str(path),
             metadata=metadata,
             targets=recommend_targets(metadata),
+            diagnosis=diagnose_source(metadata),
             created_at=datetime.now(UTC),
             playback_url=f"/api/videos/{video_id}/media",
             title=title,
             thumbnail=thumbnail,
             uploader=uploader,
         )
+        self.database.save_video(record)
+        return record
+
+    def ensure_diagnosis(self, record: VideoRecord) -> VideoRecord:
+        if record.diagnosis:
+            return record
+        record.diagnosis = diagnose_source(record.metadata)
         self.database.save_video(record)
         return record

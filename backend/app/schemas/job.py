@@ -3,12 +3,15 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
+from app.schemas.system import ResourceAllocation
+
 
 class JobStatus(StrEnum):
     QUEUED = "queued"
     PREPARING = "preparing"
     PROCESSING = "processing"
     ENCODING = "encoding"
+    PAUSED = "paused"
     COMPLETE = "complete"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -26,12 +29,59 @@ class JobKind(StrEnum):
     STREAM = "stream"
 
 
+class OutputContainer(StrEnum):
+    MP4 = "mp4"
+    MKV = "mkv"
+
+
+class TrackPolicy(StrEnum):
+    COMPATIBLE = "compatible"
+    PRESERVE = "preserve"
+
+
+class ScanTreatment(StrEnum):
+    AUTO = "auto"
+    OFF = "off"
+    DEINTERLACE = "deinterlace"
+    IVTC = "ivtc"
+
+
+class ResourcePolicy(StrEnum):
+    AUTO = "auto"
+    CONSERVATIVE = "conservative"
+    PERFORMANCE = "performance"
+
+
 class StreamChunkStatus(StrEnum):
     QUEUED = "queued"
     PROCESSING = "processing"
     READY = "ready"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+class CheckpointSegmentStatus(StrEnum):
+    QUEUED = "queued"
+    PROCESSING = "processing"
+    READY = "ready"
+
+
+class CheckpointSegment(BaseModel):
+    index: int = Field(ge=0)
+    start: float = Field(ge=0)
+    end: float = Field(gt=0)
+    status: CheckpointSegmentStatus = CheckpointSegmentStatus.QUEUED
+    progress: float = Field(default=0, ge=0, le=100)
+    output_name: str
+    checksum: str | None = None
+
+
+class JobCheckpoint(BaseModel):
+    version: int = 1
+    source_fingerprint: str
+    settings_signature: str
+    segment_seconds: float = Field(gt=0)
+    segments: list[CheckpointSegment]
 
 
 class JobCreate(BaseModel):
@@ -45,6 +95,15 @@ class JobCreate(BaseModel):
     trim_start: float = Field(default=0, ge=0)
     trim_end: float | None = Field(default=None, gt=0)
     playlist_id: str | None = None
+    output_container: OutputContainer = OutputContainer.MP4
+    track_policy: TrackPolicy = TrackPolicy.COMPATIBLE
+    preserve_metadata: bool = True
+    preserve_chapters: bool = True
+    scan_treatment: ScanTreatment = ScanTreatment.AUTO
+    resource_policy: ResourcePolicy = ResourcePolicy.AUTO
+    memory_limit_mb: int | None = Field(default=None, ge=512)
+    scene_aware: bool = True
+    scene_threshold: float = Field(default=0.35, ge=0.1, le=0.9)
 
 
 class JobProgress(BaseModel):
@@ -88,7 +147,19 @@ class JobRecord(BaseModel):
     trim_start: float = 0
     trim_end: float | None = None
     playlist_id: str | None = None
+    output_container: OutputContainer = OutputContainer.MP4
+    track_policy: TrackPolicy = TrackPolicy.COMPATIBLE
+    preserve_metadata: bool = True
+    preserve_chapters: bool = True
+    scan_treatment: ScanTreatment = ScanTreatment.AUTO
+    resource_policy: ResourcePolicy = ResourcePolicy.AUTO
+    memory_limit_mb: int | None = None
+    resource_allocation: ResourceAllocation | None = None
+    scene_aware: bool = True
+    scene_threshold: float = 0.35
     stream: StreamState | None = None
+    checkpoint: JobCheckpoint | None = None
+    recovered_after_restart: bool = False
     progress: JobProgress
     created_at: datetime
     started_at: datetime | None = None

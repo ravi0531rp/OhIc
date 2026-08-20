@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { api, API_URL } from "./lib/api";
 import type {
   EnhancementModel,
+  BatchRecord,
+  ComparisonRecord,
   Health,
   JobKind,
   JobRecord,
@@ -23,6 +25,8 @@ import { ProgressPanel } from "./components/ProgressPanel";
 import { SourcePicker } from "./components/SourcePicker";
 import { StorageDrawer } from "./components/StorageDrawer";
 import { PlaylistDrawer } from "./components/PlaylistDrawer";
+import { BatchDrawer } from "./components/BatchDrawer";
+import { MultiPreviewViewer } from "./components/MultiPreviewViewer";
 
 const FALLBACK_MODELS: EnhancementModel[] = [{
   identifier: "realesrgan-x2plus",
@@ -51,6 +55,9 @@ export function OhIcApp() {
   const [storageBusy, setStorageBusy] = useState(false);
   const [playlists, setPlaylists] = useState<PlaylistRecord[]>([]);
   const [playlistsOpen, setPlaylistsOpen] = useState(false);
+  const [batches, setBatches] = useState<BatchRecord[]>([]);
+  const [batchesOpen, setBatchesOpen] = useState(false);
+  const [previewLab, setPreviewLab] = useState<ComparisonRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -66,19 +73,30 @@ export function OhIcApp() {
     try { setPlaylists(await api.playlists()); } catch { /* local engine status is surfaced separately */ }
   }, []);
 
+  const refreshBatches = useCallback(async () => {
+    try { setBatches(await api.batches()); } catch { /* local engine status is surfaced separately */ }
+  }, []);
+
   useEffect(() => {
     void api.health().then(setHealth).catch(() => setError("OhIc's local engine is not running. Start the backend, then refresh this page."));
     void api.models().then(setModels).catch(() => undefined);
     void api.history().then(setHistory).catch(() => undefined);
     void api.playlists().then(setPlaylists).catch(() => undefined);
+    void api.batches().then(setBatches).catch(() => undefined);
   }, [refreshHistory]);
 
   const hasActivePlaylist = playlists.some((playlist) => ["queued", "running"].includes(playlist.status));
+  const hasActiveBatch = batches.some((batch) => ["queued", "running"].includes(batch.status));
   useEffect(() => {
     if (!hasActivePlaylist && !playlistsOpen) return;
     const timer = window.setInterval(() => void refreshPlaylists(), 900);
     return () => window.clearInterval(timer);
   }, [hasActivePlaylist, playlistsOpen, refreshPlaylists]);
+  useEffect(() => {
+    if (!hasActiveBatch && !batchesOpen) return;
+    const timer = window.setInterval(() => void refreshBatches(), 900);
+    return () => window.clearInterval(timer);
+  }, [batchesOpen, hasActiveBatch, refreshBatches]);
 
   useEffect(() => {
     if (!historyOpen) return;
@@ -86,7 +104,15 @@ export function OhIcApp() {
     return () => window.clearInterval(timer);
   }, [historyOpen, refreshHistory]);
 
-  const activeJobId = job && !["complete", "failed", "cancelled"].includes(job.status) ? job.id : null;
+  useEffect(() => {
+    if (!previewLab || !["queued", "running"].includes(previewLab.status)) return;
+    const timer = window.setInterval(() => {
+      void api.comparison(previewLab.id).then(setPreviewLab).catch(() => undefined);
+    }, 800);
+    return () => window.clearInterval(timer);
+  }, [previewLab]);
+
+  const activeJobId = job && !["complete", "failed", "cancelled", "paused"].includes(job.status) ? job.id : null;
   useEffect(() => {
     if (!activeJobId) return;
     let disposed = false;
@@ -101,7 +127,7 @@ export function OhIcApp() {
         if (next.kind !== "stream") setComparison(next);
         setBusy(false);
         void refreshHistory();
-      } else if (next.status === "failed" || next.status === "cancelled") {
+      } else if (["failed", "cancelled", "paused"].includes(next.status)) {
         if (next.error) setError(next.error);
         setBusy(false);
       } else {
@@ -116,14 +142,14 @@ export function OhIcApp() {
         reconnectAttempts = 0;
         const next = JSON.parse((event as MessageEvent).data) as JobRecord;
         applyUpdate(next);
-        if (["complete", "failed", "cancelled"].includes(next.status)) events?.close();
+        if (["complete", "failed", "cancelled", "paused"].includes(next.status)) events?.close();
       });
       events.onerror = () => {
         events?.close();
         if (disposed) return;
         void api.job(activeJobId).then((latest) => {
           applyUpdate(latest);
-          if (!["complete", "failed", "cancelled"].includes(latest.status)) {
+          if (!["complete", "failed", "cancelled", "paused"].includes(latest.status)) {
             reconnectAttempts += 1;
             if (reconnectAttempts === 3) {
               setError("Live progress is reconnecting. The enhancement is still running locally.");
@@ -153,6 +179,17 @@ export function OhIcApp() {
     timestamp: number,
     trimStart: number,
     trimEnd?: number,
+    output?: {
+      output_container: "mp4" | "mkv";
+      track_policy: "compatible" | "preserve";
+      preserve_metadata: boolean;
+      preserve_chapters: boolean;
+      scan_treatment: "auto" | "off" | "deinterlace" | "ivtc";
+      resource_policy: "auto" | "conservative" | "performance";
+      memory_limit_mb?: number;
+      scene_aware: boolean;
+      scene_threshold: number;
+    },
   ) => {
     if (!video) return;
     setBusy(true);
@@ -168,10 +205,37 @@ export function OhIcApp() {
         preview_timestamp: timestamp,
         trim_start: trimStart,
         trim_end: trimEnd,
+        ...output,
       }));
     } catch (requestError) {
       setBusy(false);
       setError(requestError instanceof Error ? requestError.message : "Enhancement could not start.");
+    }
+  };
+
+  const runMultiPreview = async (
+    target: ResolutionTarget,
+    modelId: string,
+    timestamp: number,
+    scanTreatment: "auto" | "off" | "deinterlace" | "ivtc",
+  ) => {
+    if (!video) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const variants = (["fast", "balanced", "maximum"] as QualityPreset[]).map((preset) => ({
+        label: preset === "fast" ? "Fast pass" : preset === "balanced" ? "Balanced pass" : "Maximum pass",
+        target_width: target.width,
+        target_height: target.height,
+        preset,
+        model_id: modelId,
+        scan_treatment: scanTreatment,
+      }));
+      setPreviewLab(await api.createComparison({ video_id: video.id, timestamp, variants }));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Preview Lab could not start.");
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -206,6 +270,17 @@ export function OhIcApp() {
     }
   };
 
+  const updateBatch = async (action: "pause" | "resume" | "cancel", selected: BatchRecord) => {
+    try {
+      if (action === "pause") await api.pauseBatch(selected.id);
+      else if (action === "resume") await api.resumeBatch(selected.id);
+      else await api.cancelBatch(selected.id);
+      await Promise.all([refreshBatches(), refreshHistory()]);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Batch action failed.");
+    }
+  };
+
   const cancel = async () => {
     if (!job) return;
     try {
@@ -214,6 +289,29 @@ export function OhIcApp() {
       await refreshHistory();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Cancellation failed.");
+    }
+  };
+
+  const pause = async (selected = job) => {
+    if (!selected) return;
+    try {
+      const pausing = await api.pauseJob(selected.id);
+      if (job?.id === selected.id) setJob(pausing);
+      await refreshHistory();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Pause failed.");
+    }
+  };
+
+  const resume = async (selected = job) => {
+    if (!selected) return;
+    try {
+      const resumed = await api.resumeJob(selected.id);
+      if (job?.id === selected.id) setJob(resumed);
+      setBusy(true);
+      await refreshHistory();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Resume failed.");
     }
   };
 
@@ -267,6 +365,7 @@ export function OhIcApp() {
     setJob(null);
     setComparison(null);
     setBusy(false);
+    setPreviewLab(null);
   };
 
   if (job?.kind === "stream" && video) {
@@ -277,9 +376,11 @@ export function OhIcApp() {
           video={video}
           onLeave={reset}
           onCancel={() => void cancel()}
+          onPause={() => void pause()}
+          onResume={() => void resume()}
           onHistory={() => { setHistoryOpen(true); void refreshHistory(); }}
         />
-        <HistoryDrawer jobs={history} open={historyOpen} onClose={() => setHistoryOpen(false)} onSelect={(selected) => void selectHistory(selected)} onCancel={(selected) => void cancelFromHistory(selected)} />
+        <HistoryDrawer jobs={history} open={historyOpen} onClose={() => setHistoryOpen(false)} onSelect={(selected) => void selectHistory(selected)} onCancel={(selected) => void cancelFromHistory(selected)} onPause={(selected) => void pause(selected)} onResume={(selected) => void resume(selected)} />
         {error && <ErrorToast message={error} onClose={() => setError(null)} />}
       </div>
     );
@@ -295,6 +396,15 @@ export function OhIcApp() {
     );
   }
 
+  if (previewLab && video) {
+    return (
+      <div className="app-shell">
+        <MultiPreviewViewer comparison={previewLab} video={video} onBack={() => setPreviewLab(null)} onCancel={() => void api.cancelComparison(previewLab.id).then(setPreviewLab)} />
+        {error && <ErrorToast message={error} onClose={() => setError(null)} />}
+      </div>
+    );
+  }
+
   return (
     <div className="app-shell">
       <nav className="topbar">
@@ -302,6 +412,7 @@ export function OhIcApp() {
         <div className="top-actions">
           {health && <span className={`hardware-pill ${health.status}`}><i /> {health.status === "ok" ? "Engine ready" : "Setup required"}</span>}
           <button onClick={() => { setPlaylistsOpen(true); setStorageOpen(false); setHistoryOpen(false); void refreshPlaylists(); }}><PlaylistIcon size={17} /> Playlists{hasActivePlaylist && <i className="nav-live" />}</button>
+          <button onClick={() => { setBatchesOpen(true); setPlaylistsOpen(false); setStorageOpen(false); setHistoryOpen(false); void refreshBatches(); }}><PlaylistIcon size={17} /> Batch queue{hasActiveBatch && <i className="nav-live" />}</button>
           <button onClick={() => { setStorageOpen(true); setPlaylistsOpen(false); setHistoryOpen(false); void refreshStorage(); }}><HardDriveIcon size={17} /> Storage</button>
           <button onClick={() => { setHistoryOpen(true); setPlaylistsOpen(false); setStorageOpen(false); void refreshHistory(); }}><HistoryIcon size={17} /> History</button>
         </div>
@@ -316,7 +427,7 @@ export function OhIcApp() {
             <h1>Make old video<br /><em>look new again.</em></h1>
             <p>Upscale individual videos, selected ranges, or entire playlists—and watch results as they are produced.</p>
           </section>
-          <SourcePicker onLoaded={(source) => { setVideo(source); setError(null); }} onPlaylistStarted={(started) => { setPlaylists((current) => [started, ...current.filter((item) => item.id !== started.id)]); setPlaylistsOpen(true); setError(null); }} onError={setError} />
+          <SourcePicker onLoaded={(source) => { setVideo(source); setError(null); }} onPlaylistStarted={(started) => { setPlaylists((current) => [started, ...current.filter((item) => item.id !== started.id)]); setPlaylistsOpen(true); setError(null); }} onBatchStarted={(started) => { setBatches((current) => [started, ...current.filter((item) => item.id !== started.id)]); setBatchesOpen(true); setError(null); }} onError={setError} />
           <div className="trust-row">
             <span>Real-ESRGAN ×2</span>
             <span>On-device processing</span>
@@ -329,14 +440,15 @@ export function OhIcApp() {
             <button onClick={reset}>← New video</button>
             <span>{video.source_type === "youtube" ? "YouTube source" : "Uploaded source"}</span>
           </div>
-          {job && !["complete", "failed", "cancelled"].includes(job.status) && <ProgressPanel job={job} onCancel={() => void cancel()} />}
-          <EnhancementWorkspace key={`${video.id}:${job?.id ?? "new"}`} video={video} models={models} initialJob={job} busy={busy} onRun={(...args) => void runJob(...args)} />
+          {job && !["complete", "failed", "cancelled"].includes(job.status) && <ProgressPanel job={job} onCancel={() => void cancel()} onPause={() => void pause()} onResume={() => void resume()} />}
+          <EnhancementWorkspace key={`${video.id}:${job?.id ?? "new"}`} video={video} models={models} initialJob={job} busy={busy} onRun={(...args) => void runJob(...args)} onMultiPreview={(...args) => void runMultiPreview(...args)} />
         </div>
       )}
 
-      <HistoryDrawer jobs={history} open={historyOpen} onClose={() => setHistoryOpen(false)} onSelect={(selected) => void selectHistory(selected)} onCancel={(selected) => void cancelFromHistory(selected)} />
+      <HistoryDrawer jobs={history} open={historyOpen} onClose={() => setHistoryOpen(false)} onSelect={(selected) => void selectHistory(selected)} onCancel={(selected) => void cancelFromHistory(selected)} onPause={(selected) => void pause(selected)} onResume={(selected) => void resume(selected)} />
       <StorageDrawer items={storage} open={storageOpen} busy={storageBusy} onClose={() => setStorageOpen(false)} onCleanup={(ids) => void cleanupStorage(ids)} />
       <PlaylistDrawer playlists={playlists} open={playlistsOpen} onClose={() => setPlaylistsOpen(false)} onCancel={(selected) => void cancelPlaylist(selected)} onDelete={(selected) => void deletePlaylist(selected)} onOpenResult={(id) => void openPlaylistResult(id)} />
+      <BatchDrawer batches={batches} open={batchesOpen} onClose={() => setBatchesOpen(false)} onPause={(selected) => void updateBatch("pause", selected)} onResume={(selected) => void updateBatch("resume", selected)} onCancel={(selected) => void updateBatch("cancel", selected)} onOpenResult={(id) => void openPlaylistResult(id)} />
       {error && <ErrorToast message={error} onClose={() => setError(null)} />}
     </div>
   );

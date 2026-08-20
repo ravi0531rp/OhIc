@@ -7,20 +7,24 @@ import { api, API_URL } from "../lib/api";
 import type {
   PlaylistMetadata,
   PlaylistRecord,
+  BatchRecord,
+  PresetRecord,
   QualityPreset,
   VideoRecord,
   YouTubeDownloadRecord,
   YouTubeMetadata,
+  YouTubeReliabilityReport,
 } from "../lib/types";
 import { LinkIcon, ShieldIcon, UploadIcon } from "./Icons";
 
 type Props = {
   onLoaded: (video: VideoRecord) => void;
   onPlaylistStarted: (playlist: PlaylistRecord) => void;
+  onBatchStarted: (batch: BatchRecord) => void;
   onError: (message: string) => void;
 };
 
-export function SourcePicker({ onLoaded, onPlaylistStarted, onError }: Props) {
+export function SourcePicker({ onLoaded, onPlaylistStarted, onBatchStarted, onError }: Props) {
   const [tab, setTab] = useState<"upload" | "youtube">("upload");
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -31,16 +35,36 @@ export function SourcePicker({ onLoaded, onPlaylistStarted, onError }: Props) {
   const [selectedPlaylistIds, setSelectedPlaylistIds] = useState<Set<string>>(new Set());
   const [playlistPreset, setPlaylistPreset] = useState<QualityPreset>("balanced");
   const [download, setDownload] = useState<YouTubeDownloadRecord | null>(null);
+  const [reliability, setReliability] = useState<YouTubeReliabilityReport | null>(null);
+  const [reliabilityOpen, setReliabilityOpen] = useState(false);
+  const [presets, setPresets] = useState<PresetRecord[]>([]);
+  const [batchPreset, setBatchPreset] = useState("balanced");
   const inputRef = useRef<HTMLInputElement>(null);
   const eventsRef = useRef<EventSource | null>(null);
 
   useEffect(() => () => eventsRef.current?.close(), []);
+  useEffect(() => { void api.presets().then(setPresets).catch(() => undefined); }, []);
+  useEffect(() => {
+    if (tab !== "youtube" || reliability) return;
+    void api.youtubeReliability().then(setReliability).catch(() => undefined);
+  }, [reliability, tab]);
 
-  const upload = async (file?: File) => {
-    if (!file) return;
+  const upload = async (selection?: FileList | File[]) => {
+    const files = Array.from(selection ?? []);
+    if (!files.length) return;
     setBusy(true);
     try {
-      onLoaded(await api.upload(file));
+      if (files.length === 1) {
+        onLoaded(await api.upload(files[0]));
+      } else {
+        const videos = await api.uploadBatch(files);
+        const savedPreset = presets.find((preset) => preset.id === batchPreset);
+        onBatchStarted(await api.createBatch({
+          video_ids: videos.map((item) => item.id),
+          preset_id: savedPreset?.id,
+          preset: savedPreset ? savedPreset.quality : batchPreset as QualityPreset,
+        }));
+      }
     } catch (error) {
       onError(error instanceof Error ? error.message : "Video upload failed.");
     } finally {
@@ -157,31 +181,35 @@ export function SourcePicker({ onLoaded, onPlaylistStarted, onError }: Props) {
       </div>
 
       {tab === "upload" ? (
-        <button
-          className={`dropzone ${dragging ? "dragging" : ""}`}
-          disabled={busy}
-          onClick={() => inputRef.current?.click()}
-          onDragEnter={() => setDragging(true)}
-          onDragLeave={() => setDragging(false)}
-          onDragOver={(event) => event.preventDefault()}
-          onDrop={(event) => {
-            event.preventDefault();
-            setDragging(false);
-            void upload(event.dataTransfer.files[0]);
-          }}
-        >
-          <input
-            ref={inputRef}
-            accept="video/mp4,video/quicktime,video/x-matroska,video/x-msvideo,video/webm,.m4v"
-            hidden
-            type="file"
-            onChange={(event) => void upload(event.target.files?.[0])}
-          />
-          <span className="drop-icon"><UploadIcon size={25} /></span>
-          <strong>{busy ? "Inspecting video…" : "Drop your video here"}</strong>
-          <span>{busy ? "Reading resolution, frame rate and codec" : "or click to browse files"}</span>
-          <small>MP4, MOV, MKV, AVI or WebM · up to 20 GB</small>
-        </button>
+        <>
+          <button
+            className={`dropzone ${dragging ? "dragging" : ""}`}
+            disabled={busy}
+            onClick={() => inputRef.current?.click()}
+            onDragEnter={() => setDragging(true)}
+            onDragLeave={() => setDragging(false)}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault();
+              setDragging(false);
+              void upload(event.dataTransfer.files);
+            }}
+          >
+            <input
+              ref={inputRef}
+              accept="video/mp4,video/quicktime,video/x-matroska,video/x-msvideo,video/webm,.m4v"
+              hidden
+              multiple
+              type="file"
+              onChange={(event) => void upload(event.target.files ?? undefined)}
+            />
+            <span className="drop-icon"><UploadIcon size={25} /></span>
+            <strong>{busy ? "Preparing local queue…" : "Drop one or more videos here"}</strong>
+            <span>{busy ? "Inspecting each source and creating durable jobs" : "One file opens setup; multiple files start a batch"}</span>
+            <small>MP4, MOV, MKV, AVI or WebM · up to 100 files</small>
+          </button>
+          <label className="batch-upload-options">Batch preset<select disabled={busy} value={batchPreset} onChange={(event) => setBatchPreset(event.target.value)}><option value="balanced">Recommended targets · Balanced</option><option value="fast">Recommended targets · Fast</option><option value="maximum">Recommended targets · Maximum</option>{presets.map((preset) => <option value={preset.id} key={preset.id}>{preset.name}</option>)}</select></label>
+        </>
       ) : (
         <div className="youtube-pane">
           {!youtube && !playlist ? (
@@ -272,10 +300,34 @@ export function SourcePicker({ onLoaded, onPlaylistStarted, onError }: Props) {
                     </button>
                   )}
                   {download.status === "cancelled" && <small className="download-stopped">Download stopped</small>}
+                  {download.status === "failed" && (
+                    <div className="youtube-recovery">
+                      <strong>{download.error ?? "YouTube import failed."}</strong>
+                      {download.recovery_steps.map((step) => <small key={step}>• {step}</small>)}
+                      <button onClick={() => void confirmYouTube()}>Retry all recovery routes</button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
           ) : null}
+          {reliability && (
+            <div className={`reliability-center ${reliabilityOpen ? "open" : ""}`}>
+              <button className="reliability-summary" onClick={() => setReliabilityOpen((value) => !value)}>
+                <span><i className={reliability.status} /> YouTube Reliability Center</span>
+                <small>yt-dlp {reliability.yt_dlp_version} · {reliability.status === "ready" ? "core checks ready" : "action needed"}</small>
+              </button>
+              {reliabilityOpen && (
+                <div className="reliability-details">
+                  {reliability.checks.map((check) => (
+                    <div key={check.id}><i className={check.status} /><span><strong>{check.label}</strong><small>{check.detail}</small></span></div>
+                  ))}
+                  {reliability.recommendations.map((item) => <p key={item}>{item}</p>)}
+                  <button onClick={() => { setReliability(null); setReliabilityOpen(true); }}>Run checks again</button>
+                </div>
+              )}
+            </div>
+          )}
           <p className="legal-note"><ShieldIcon size={15} /> Only process videos you own or are permitted to use.</p>
         </div>
       )}

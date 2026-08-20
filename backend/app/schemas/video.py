@@ -9,6 +9,15 @@ class SourceType(StrEnum):
     YOUTUBE = "youtube"
 
 
+class MediaTrack(BaseModel):
+    index: int
+    kind: str
+    codec: str
+    language: str | None = None
+    title: str | None = None
+    channels: int | None = None
+
+
 class VideoMetadata(BaseModel):
     width: int
     height: int
@@ -23,6 +32,34 @@ class VideoMetadata(BaseModel):
     file_size: int
     pixel_format: str | None = None
     dynamic_range: str = "SDR"
+    field_order: str = "progressive"
+    tracks: list[MediaTrack] = Field(default_factory=list)
+    chapters: int = 0
+    title: str | None = None
+
+
+class SourceIssue(BaseModel):
+    code: str
+    severity: str
+    title: str
+    detail: str
+
+
+class EnhancementRecipe(BaseModel):
+    name: str
+    summary: str
+    target_height: int
+    preset: str
+    model_id: str
+    deinterlace: str = "off"
+    reasons: list[str] = Field(default_factory=list)
+
+
+class SourceDiagnosis(BaseModel):
+    verdict: str
+    confidence: str
+    issues: list[SourceIssue]
+    recipe: EnhancementRecipe
 
 
 class ResolutionTarget(BaseModel):
@@ -45,6 +82,7 @@ class VideoRecord(BaseModel):
     title: str | None = None
     thumbnail: str | None = None
     uploader: str | None = None
+    diagnosis: SourceDiagnosis | None = None
 
 
 class YouTubeInspectRequest(BaseModel):
@@ -72,6 +110,7 @@ class YouTubeDownloadProgress(BaseModel):
     speed: float | None = None
     eta: float | None = None
     attempt: int = 1
+    strategy: str = "Automatic"
 
 
 class YouTubeDownloadRecord(BaseModel):
@@ -82,6 +121,25 @@ class YouTubeDownloadRecord(BaseModel):
     created_at: datetime
     video: VideoRecord | None = None
     error: str | None = None
+    failure_code: str | None = None
+    recovery_steps: list[str] = Field(default_factory=list)
+
+
+class YouTubeReliabilityCheck(BaseModel):
+    id: str
+    label: str
+    status: str
+    detail: str
+
+
+class YouTubeReliabilityReport(BaseModel):
+    status: str
+    yt_dlp_version: str
+    node_version: str | None = None
+    cookies_configured: bool = False
+    po_token_provider: bool = False
+    checks: list[YouTubeReliabilityCheck]
+    recommendations: list[str]
 
 
 class YouTubeMetadata(BaseModel):

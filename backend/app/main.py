@@ -6,7 +6,13 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.dependencies import get_database, get_job_manager, get_playlist_manager
+from app.api.dependencies import (
+    get_batch_manager,
+    get_comparison_manager,
+    get_database,
+    get_job_manager,
+    get_playlist_manager,
+)
 from app.api.routes import router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
@@ -31,8 +37,12 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     configure_logging(settings.log_level)
     get_database()
-    get_job_manager()
+    recovered = get_job_manager().recover_interrupted()
+    if recovered:
+        __import__("structlog").get_logger().info("jobs_recovered", count=recovered)
     get_playlist_manager()
+    get_batch_manager()
+    get_comparison_manager()
     clean_stale_temp(settings.data_dir / "temp", settings.stale_temp_hours)
     yield
 

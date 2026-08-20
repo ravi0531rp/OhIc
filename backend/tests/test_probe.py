@@ -19,10 +19,22 @@ def test_parse_ffprobe_extracts_useful_metadata():
                 "nb_frames": "4020",
                 "pix_fmt": "yuv420p",
                 "color_transfer": "bt709",
+                "field_order": "tt",
             },
             {"codec_type": "audio", "codec_name": "aac"},
+            {
+                "index": 2,
+                "codec_type": "subtitle",
+                "codec_name": "subrip",
+                "tags": {"language": "eng", "title": "English"},
+            },
         ],
-        "format": {"duration": "134.1", "bit_rate": "1200000"},
+        "format": {
+            "duration": "134.1",
+            "bit_rate": "1200000",
+            "tags": {"title": "Archive clip"},
+        },
+        "chapters": [{"id": 0}, {"id": 1}],
     }
     result = parse_ffprobe(payload, file_size=20_000_000)
     assert result.width == 854
@@ -33,6 +45,10 @@ def test_parse_ffprobe_extracts_useful_metadata():
     assert result.audio_codec == "AAC"
     assert result.frame_count == 4020
     assert result.dynamic_range == "SDR"
+    assert result.field_order == "tt"
+    assert result.chapters == 2
+    assert result.title == "Archive clip"
+    assert result.tracks[2].language == "eng"
 
 
 def test_resolution_label_does_not_overstate_unusual_sizes():

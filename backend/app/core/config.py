@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     enable_realbasicvsr: bool = True
     log_level: str = "INFO"
     stale_temp_hours: int = 24
+    checkpoint_seconds: float = Field(default=30.0, ge=5.0, le=300.0)
+    youtube_cookies_file: Path | None = None
 
     @property
     def resolved_model_dir(self) -> Path:

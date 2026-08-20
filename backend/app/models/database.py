@@ -3,6 +3,8 @@ import sqlite3
 import threading
 from pathlib import Path
 
+from app.schemas.batch import BatchRecord, PresetRecord
+from app.schemas.comparison import ComparisonRecord
 from app.schemas.job import JobRecord
 from app.schemas.playlist import PlaylistRecord
 from app.schemas.video import VideoRecord
@@ -39,6 +41,21 @@ class Database:
                   updated_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS playlists_updated ON playlists(updated_at DESC);
+                CREATE TABLE IF NOT EXISTS batches (
+                  id TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS batches_updated ON batches(updated_at DESC);
+                CREATE TABLE IF NOT EXISTS presets (
+                  id TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS presets_created ON presets(created_at DESC);
+                CREATE TABLE IF NOT EXISTS comparisons (
+                  id TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS comparisons_updated
+                  ON comparisons(updated_at DESC);
                 """
             )
             conn.execute("PRAGMA optimize")
@@ -134,3 +151,78 @@ class Database:
     def delete_playlist(self, playlist_id: str) -> None:
         with self._lock, self._connect() as conn:
             conn.execute("DELETE FROM playlists WHERE id = ?", (playlist_id,))
+
+    def save_batch(self, batch: BatchRecord) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO batches VALUES (?, ?, ?, ?)",
+                (
+                    batch.id,
+                    batch.model_dump_json(),
+                    batch.created_at.isoformat(),
+                    batch.updated_at.isoformat(),
+                ),
+            )
+
+    def get_batch(self, batch_id: str) -> BatchRecord | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM batches WHERE id = ?", (batch_id,)
+            ).fetchone()
+        return BatchRecord.model_validate_json(row["payload"]) if row else None
+
+    def list_batches(self, limit: int = 50) -> list[BatchRecord]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM batches ORDER BY updated_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [BatchRecord.model_validate_json(row["payload"]) for row in rows]
+
+    def save_preset(self, preset: PresetRecord) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO presets VALUES (?, ?, ?)",
+                (preset.id, preset.model_dump_json(), preset.created_at.isoformat()),
+            )
+
+    def get_preset(self, preset_id: str) -> PresetRecord | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM presets WHERE id = ?", (preset_id,)
+            ).fetchone()
+        return PresetRecord.model_validate_json(row["payload"]) if row else None
+
+    def list_presets(self) -> list[PresetRecord]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT payload FROM presets ORDER BY created_at DESC").fetchall()
+        return [PresetRecord.model_validate_json(row["payload"]) for row in rows]
+
+    def delete_preset(self, preset_id: str) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute("DELETE FROM presets WHERE id = ?", (preset_id,))
+
+    def save_comparison(self, comparison: ComparisonRecord) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO comparisons VALUES (?, ?, ?, ?)",
+                (
+                    comparison.id,
+                    comparison.model_dump_json(),
+                    comparison.created_at.isoformat(),
+                    comparison.updated_at.isoformat(),
+                ),
+            )
+
+    def get_comparison(self, comparison_id: str) -> ComparisonRecord | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM comparisons WHERE id = ?", (comparison_id,)
+            ).fetchone()
+        return ComparisonRecord.model_validate_json(row["payload"]) if row else None
+
+    def list_comparisons(self, limit: int = 50) -> list[ComparisonRecord]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM comparisons ORDER BY updated_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [ComparisonRecord.model_validate_json(row["payload"]) for row in rows]
