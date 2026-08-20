@@ -81,6 +81,35 @@ OhIc/
 
 ## Setup from a fresh clone
 
+### Consumer one-command installation
+
+The root `install.sh` is both an installer and a production launcher. On macOS and Linux it can be
+run without cloning the repository first:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ravi0531rp/OhIc/main/install.sh | bash
+```
+
+It downloads a release into the platform user-data directory, provisions uv and a private Node 22
+runtime when necessary, installs FFmpeg through Homebrew or a supported Linux package manager,
+creates the Python environment, runs `npm ci`, builds the production frontend, verifies the backend
+import, installs `~/.local/bin/ohic`, and launches both localhost services. Application data lives
+outside versioned releases, so `ohic --update` does not overwrite videos, jobs, presets, or model
+weights.
+
+Useful noninteractive and diagnostic modes:
+
+```bash
+./install.sh --install-only
+./install.sh --no-open
+./install.sh --doctor
+OHIC_HOME=/custom/location ./install.sh --install-only
+```
+
+The script is intentionally limited to macOS and Linux. System FFmpeg installation can require
+administrator approval; all other managed tools are installed under `OHIC_HOME` or the current
+user's binary directory.
+
 ### 1. Choose a supported environment
 
 - **macOS 13+:** supported with PyTorch MPS acceleration when available and CPU fallback.
@@ -305,6 +334,8 @@ Copy `.env.example` to `.env`. Every application setting is listed below.
 | `OHIC_MODEL_DIR` | filesystem path or unset | `${OHIC_DATA_DIR}/models` | Model-weight cache. If unset, the backend derives it from `OHIC_DATA_DIR`. |
 | `OHIC_MAX_UPLOAD_GB` | positive number | `20` | Maximum streamed local upload size in GiB. The service reads 4 MiB chunks and deletes the partial file if the limit is crossed. This does not limit YouTube downloads or outputs. |
 | `OHIC_STALE_TEMP_HOURS` | integer hours | `24` | On backend startup, files and directories directly under `data/temp` older than this age are removed. Completed outputs and stream parts are not affected. |
+| `OHIC_CHECKPOINT_SECONDS` | seconds, 5–300 | `30` | Durable segment length for full-video pause/resume checkpoints. Smaller values reduce lost work but create more intermediate files and concat entries. |
+| `OHIC_YOUTUBE_COOKIES_FILE` | filesystem path or unset | unset | Optional Netscape-format cookies file passed to yt-dlp for content the configured account may access. The path and cookie contents are never returned by the API. Restart after changing it. |
 | `OHIC_DEFAULT_MODEL` | model ID | `realesrgan-x2plus` | Reserved pipeline default. Current UI/API requests explicitly default `model_id` to `realesrgan-x2plus`; changing only this variable does not change submitted jobs yet. |
 | `OHIC_DEFAULT_CODEC` | codec ID | `h264` | Reserved codec default. The current encoder is explicitly `libx264` with MP4 output; changing only this variable has no effect yet. |
 | `OHIC_ENABLE_REALBASICVSR` | boolean | `true` | Registers the experimental `realbasicvsr-x4-experimental` engine in `/api/models` and the UI. Set `false` and restart to expose only Real-ESRGAN. This does not delete cached weights or prior job records. |
@@ -396,12 +427,32 @@ full/range jobs. Its capability metadata rejects stream jobs and inputs above 12
 job enters the queue. The interpolation adapter `lanczos-test` is instantiated only by explicit
 test/benchmark registries and is not available through the production API.
 
+### Scan, container, track, resource, and scene settings
+
+Every `JobCreate` also accepts these persisted fields:
+
+| Field | Values/default | Effect |
+| --- | --- | --- |
+| `output_container` | `mp4` (default), `mkv` | Result suffix/container. Stream jobs require MP4. |
+| `track_policy` | `compatible` (default), `preserve` | Compatible MP4 maps all audio and AAC-encodes it. Preserve+MKV also stream-copies subtitles, attachments, and data tracks. |
+| `preserve_metadata` | `true` | Maps source container/stream metadata during final mux. |
+| `preserve_chapters` | `true` | Maps source chapters during final mux. |
+| `scan_treatment` | `auto` (default), `off`, `deinterlace`, `ivtc` | Auto applies `bwdif` only when FFprobe reports interlacing. Explicit deinterlace applies `bwdif` to all frames. IVTC uses `fieldmatch,bwdif,decimate` and is rejected outside 29–31 FPS. |
+| `resource_policy` | `auto` (default), `conservative`, `performance` | Selects pressure-aware inference tile and temporal-window bounds. |
+| `memory_limit_mb` | unset or >=512 | Caps the memory budget used by the resource planner; it is not an OS-level hard limit. |
+| `scene_aware` | `true` | Resets RealBasicVSR context at detected hard cuts. Frame engines ignore it. |
+| `scene_threshold` | `0.35`, range 0.1–0.9 | Hard-cut sensitivity for sparse luma/histogram comparison; lower detects more cuts. |
+
+Full jobs persist a source fingerprint, settings signature, segment plan, status, output name, and
+SHA-256 for every completed checkpoint. Changing a source file invalidates resume. Preview jobs
+restart from the beginning; stream jobs reuse persisted ready parts.
+
 ## Architecture and data flow
 
 ```mermaid
 flowchart LR
   UI["React workspace"] -->|"REST requests"| API["FastAPI routes"]
-  API --> Services["Video / YouTube / playlist / storage services"]
+  API --> Services["Video / YouTube / playlist / batch / comparison / storage services"]
   Services --> DB["SQLite typed JSON records"]
   Services --> FS["Managed local files"]
   API --> Jobs["Single-worker job manager"]
@@ -409,7 +460,7 @@ flowchart LR
   Jobs --> Decode["FFmpeg RGB decoder"]
   Decode --> AI["Selected frame or temporal engine"]
   AI --> Encode["FFmpeg H.264 encoder"]
-  Encode --> Mux["AAC audio mux + fast-start MP4"]
+  Encode --> Mux["Track-aware MP4 or MKV mux"]
   Mux --> FS
   DB -->|"SSE snapshots"| UI
   FS -->|"local media routes"| UI
@@ -442,19 +493,22 @@ data/
 ├── uploads/                     # UUID-named copies of local uploads
 ├── downloads/                   # yt-dlp files and temporary fragments
 ├── models/                      # RealESRGAN_x2plus.pth
-├── outputs/                     # previews, final MP4s, originals, stream parts
+├── outputs/                     # previews, MP4/MKV results, durable checkpoints, stream parts
 ├── temp/                        # transient per-job FFmpeg logs/workspaces
 ├── jobs/                        # reserved runtime directory
 └── ohic.sqlite3                 # records and paths, not video blobs
 ```
 
-SQLite uses WAL mode and three tables:
+SQLite uses WAL mode and six typed-JSON tables:
 
 | Table | Columns outside JSON | JSON payload |
 | --- | --- | --- |
 | `videos` | `id`, `created_at` | Source type, original name, managed path, metadata, targets, playback URL, optional YouTube display metadata |
 | `jobs` | `id`, `video_id`, `status`, `created_at` | Complete job settings, progress, stream plan, timestamps, output path/URLs, errors |
 | `playlists` | `id`, `created_at`, `updated_at` | Playlist display data, preset, overall state, and every item state/reference |
+| `batches` | `id`, `created_at`, `updated_at` | Persistent local multi-file queue and child job references |
+| `presets` | `id`, `created_at` | Named target, engine, quality, container, scan, resource, and scene settings |
+| `comparisons` | `id`, `created_at`, `updated_at` | Preview Lab variants, child jobs, progress, and output URLs |
 
 The Pydantic response model excludes source `path` and job `output_path`, but persistence explicitly
 adds them to stored JSON. API media routes resolve the stored record and verify the requested file
@@ -477,11 +531,14 @@ Interactive schemas are always available at `/docs`. All application routes are 
 | Method | Path | Purpose | Success |
 | --- | --- | --- | --- |
 | `GET` | `/api/health` | FFmpeg/FFprobe status and detected hardware | 200 |
+| `GET` | `/api/system/resources` | Current memory pressure, available memory, CPU count, and load | 200 |
 | `GET` | `/api/models` | Enabled engine metadata and capabilities | 200 |
 | `POST` | `/api/videos/upload` | Multipart video ingestion (`file`) | 200 |
+| `POST` | `/api/videos/upload/batch` | Ingest 1–100 multipart videos (`files`) | 200 |
 | `GET` | `/api/videos/{video_id}` | Persisted source record | 200 |
 | `GET` | `/api/videos/{video_id}/media` | Local source media | 200 |
 | `POST` | `/api/videos/youtube/inspect` | Inspect one YouTube video | 200 |
+| `GET` | `/api/videos/youtube/reliability` | Local yt-dlp/Node/cookies/PO-provider diagnostics | 200 |
 | `POST` | `/api/videos/youtube/download` | Queue one YouTube download | 202 |
 | `GET` | `/api/videos/youtube/downloads/{id}` | Download snapshot | 200 |
 | `POST` | `/api/videos/youtube/downloads/{id}/cancel` | Stop queued/active download | 200 |
@@ -497,12 +554,21 @@ Interactive schemas are always available at `/docs`. All application routes are 
 | `GET` | `/api/jobs?limit=20` | List 1–100 recent jobs | 200 |
 | `GET` | `/api/jobs/{id}` | Job snapshot | 200 |
 | `POST` | `/api/jobs/{id}/cancel` | Stop queued/active job | 200 |
+| `POST` | `/api/jobs/{id}/pause` | Request a checkpoint-safe pause | 200 |
+| `POST` | `/api/jobs/{id}/resume` | Resume paused/recoverable failed work | 200 |
 | `GET` | `/api/jobs/{id}/events` | Job SSE stream | 200 |
 | `GET` | `/api/jobs/{id}/stream/{index}` | Ready stream part; 425 while not ready | 200 |
-| `GET` | `/api/jobs/{id}/result` | Completed enhanced MP4 | 200 |
+| `GET` | `/api/jobs/{id}/result` | Completed enhanced MP4 or MKV | 200 |
 | `GET` | `/api/jobs/{id}/original` | Completed preview/range original MP4 | 200 |
 | `GET` | `/api/storage/items` | Managed sources and outputs | 200 |
 | `POST` | `/api/storage/cleanup` | Delete selected inactive records/files | 200 |
+| `GET`,`POST` | `/api/presets` | List/create named local presets | 200/201 |
+| `DELETE` | `/api/presets/{id}` | Delete one preset | 204 |
+| `GET`,`POST` | `/api/batches`, `/api/batches` | List/create persistent local batches | 200/202 |
+| `POST` | `/api/batches/{id}/{pause,resume,cancel}` | Group control for child jobs | 200 |
+| `GET`,`POST` | `/api/comparisons`, `/api/comparisons` | List/create Preview Lab sessions | 200/202 |
+| `GET` | `/api/comparisons/{id}` | Refresh one comparison session | 200 |
+| `POST` | `/api/comparisons/{id}/cancel` | Stop comparison child jobs | 200 |
 
 SSE endpoints emit named `progress` events containing the full current JSON record and send
 comment keep-alives. Job/playlist intervals are 0.5 seconds; download intervals are 0.35 seconds.
@@ -622,10 +688,12 @@ loading looks for `params_ema`, then `params`, then the checkpoint root, and per
 state-dict validation. A validation failure deletes the cached checkpoint so the next job
 downloads it again. CUDA uses FP16 inference; MPS and CPU use FP32.
 
-The `experiment/realbasicvsr` branch also registers a sequence-oriented RealBasicVSR ×4 engine
+The main branch also registers a sequence-oriented RealBasicVSR ×4 engine
 behind `OHIC_ENABLE_REALBASICVSR`. It uses a separate bounded temporal-window pipeline for preview
-and full/range jobs, because forcing temporal inference through the one-frame contract would remove
-the information under evaluation. Installation, verified device status, window strategy,
+and full/range jobs. A bounded hard-cut detector combines sparse luma difference and per-channel
+histogram distance; a detected cut flushes the current window and prevents temporal overlap from
+crossing scenes. Single-frame scenes are duplicated only as model context and emitted once.
+Installation, verified device status, window strategy,
 checkpoint/license details, limitations, and comparison commands are documented in
 [the RealBasicVSR experiment](docs/realbasicvsr-experiment.md).
 
@@ -639,8 +707,8 @@ checkpoint/license details, limitations, and comparison commands are documented 
    if exact target dimensions differ.
 6. Python writes the target-sized `rgb24` frame to a second FFmpeg process.
 7. FFmpeg encodes `libx264`, the preset-specific CRF, and `yuv420p` into an intermediate video.
-8. A final FFmpeg command copies enhanced video, selects optional source audio, encodes it as AAC
-   at 192 kb/s, applies `-shortest`, and writes a fast-start MP4.
+8. A final FFmpeg command maps all source audio, metadata, and chapters into fast-start MP4, or
+   stream-copies all compatible source tracks into MKV archive mode.
 9. The job record exposes the result only after successful finalization.
 10. Partial final/original results and temporary workspaces are removed on failure/cancellation.
 
@@ -689,9 +757,11 @@ throttled if it persists for 10 seconds; the partial file is removed and the nex
 Cancellation is checked before attempts and inside progress hooks, and all matching fragments are
 deleted. A completed file is probed and persisted as a `VideoRecord`.
 
-Because YouTube changes independently of OhIc, update and test yt-dlp when inspection/download
-behavior regresses. Some formats require authentication or a PO token; OhIc intentionally does not
-accept cookies, credentials, or token configuration in this release.
+`GET /api/videos/youtube/reliability` reports the installed yt-dlp version, Node challenge runtime,
+optional configured cookies file, and detected PO-token-provider distribution. Download failures
+persist a category (`youtube_attestation`, `authentication_required`, `region_restricted`,
+`rate_limited`, `unavailable`, or `extractor_failure`) and recovery steps. A Netscape cookies file
+can be supplied through `OHIC_YOUTUBE_COOKIES_FILE`; do not commit it.
 
 ### Playlist execution
 
@@ -745,11 +815,11 @@ final concat until storage cleanup deletes the job output.
 
 ## Concurrency, cancellation, and restart behavior
 
-There are three separate one-worker executors:
+There are three primary one-worker executors plus persisted orchestration records:
 
 | Executor | Scope | Persistence |
 | --- | --- | --- |
-| `ohic-enhance` | Preview, full, stream, and playlist child enhancement jobs | Job records persist; queued futures/runtimes do not |
+| `ohic-enhance` | Preview, full, stream, local-batch, comparison, and playlist child jobs | Job/checkpoint/stream state persists; futures/runtimes are recreated by explicit resume |
 | `ohic-youtube` | Standalone YouTube downloads | In-memory download records only; completed video records persist |
 | `ohic-playlist` | Playlist orchestration | Playlist/item records persist; executor work does not resume |
 
@@ -757,15 +827,17 @@ These executors can run at the same time. A playlist download can overlap a stan
 and non-enhancement work can overlap enhancement. Only enhancement inference itself is globally
 serialized by the job executor.
 
-Every live job has a `threading.Event` and a registry of active FFmpeg `Popen` processes.
+Every live job has cancel and pause `threading.Event` values plus a registry of active FFmpeg
+`Popen` processes.
 Cancellation sets the event and calls `terminate()` on registered processes. Frame and tile loops
 also check the event. Cancelling a queued enhancement marks the persisted job cancelled; when its
 future reaches the worker, it exits without processing.
 
-The backend currently has no startup reconciliation/resume worker. After a process crash or hard
-stop, persisted jobs/playlists may still show an active state, but their Python future, cancellation
-event, and subprocesses are gone. Completed records and files remain usable. Implementing durable
-resume requires explicit startup state reconciliation and frame/part checkpoints.
+Startup reconciliation changes persisted queued/preparing/processing/encoding jobs to `paused`
+with `recovered_after_restart=true`. Explicit resume validates the source fingerprint, recreates a
+runtime, and requeues the job. Full jobs verify each segment SHA-256 before reuse; streaming jobs
+reuse ready chunk files. A pause terminates active FFmpeg processes only after persisting completed
+checkpoint bookkeeping. Cancel remains terminal and Storage can remove checkpoint files.
 
 ## Security and privacy boundaries
 
@@ -1085,17 +1157,19 @@ and test existing databases before introducing required fields or enum values.
 
 ## Known technical limitations
 
-- Per-frame enhancement can shimmer because there is no temporal model/window.
-- The RGB8 pipeline does not preserve HDR color or metadata.
-- Subtitle streams, chapters, attachments, multiple audio tracks, and container metadata are not
-  copied to output.
-- The output codec/container are currently fixed despite reserved default settings.
+- Real-ESRGAN remains frame-independent and can shimmer; RealBasicVSR is experimental and limited
+  to sources at or below 1280×720.
+- HDR transfer characteristics are detected but the RGB8 enhancement path still produces SDR.
+- MKV archive mode preserves tracks, but enhanced video remains H.264 and browser MKV playback is
+  not guaranteed.
 - Only the official ×2 RRDBNet checkpoint is production-registered.
-- In-process queues do not resume after backend termination.
+- Standalone YouTube downloads and playlist orchestration do not yet resume mid-download after
+  backend termination; enhancement child jobs recover as paused.
 - Standalone download progress records are memory-only.
 - Playlist workers do not resume after backend termination and do not expose per-item target/range.
 - Playlist inspection is capped at 100 flat entries.
-- YouTube cookies, login, and PO-token configuration are intentionally absent.
+- Cookies can be configured by file, but the UI never collects credentials and does not install a
+  PO-token provider automatically.
 - Stream parts are independent MP4s rather than a standards-based HLS/DASH manifest.
 - Final stream concat requires compatible independently encoded parts.
 - One-worker queues favor memory safety over throughput.

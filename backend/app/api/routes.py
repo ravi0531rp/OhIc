@@ -5,6 +5,8 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
 from app.api.dependencies import (
+    get_batch_manager,
+    get_comparison_manager,
     get_database,
     get_job_manager,
     get_playlist_manager,
@@ -15,6 +17,9 @@ from app.api.dependencies import (
     get_youtube_service,
 )
 from app.core.device import detect_hardware
+from app.core.resources import resource_snapshot
+from app.schemas.batch import BatchCreateRequest, BatchRecord, PresetCreate, PresetRecord
+from app.schemas.comparison import ComparisonCreate, ComparisonRecord
 from app.schemas.job import JobCreate, JobRecord, JobStatus
 from app.schemas.playlist import (
     PlaylistCreateRequest,
@@ -24,7 +29,7 @@ from app.schemas.playlist import (
     PlaylistStatus,
 )
 from app.schemas.storage import StorageCleanupRequest, StorageCleanupResult, StorageItem
-from app.schemas.system import HealthResponse
+from app.schemas.system import HealthResponse, ResourceSnapshot
 from app.schemas.video import (
     VideoRecord,
     YouTubeDownloadRecord,
@@ -32,6 +37,7 @@ from app.schemas.video import (
     YouTubeDownloadStatus,
     YouTubeInspectRequest,
     YouTubeMetadata,
+    YouTubeReliabilityReport,
 )
 from app.services.dependencies import dependency_status
 from app.services.videos import UploadTooLargeError
@@ -54,6 +60,11 @@ def health() -> HealthResponse:
     )
 
 
+@router.get("/system/resources", response_model=ResourceSnapshot)
+def system_resources() -> ResourceSnapshot:
+    return resource_snapshot()
+
+
 @router.get("/models")
 def models() -> list[dict]:
     return [model.metadata.__dict__ for model in get_registry().available()]
@@ -67,12 +78,109 @@ async def upload_video(file: UploadFile = File(...)) -> VideoRecord:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/videos/upload/batch", response_model=list[VideoRecord])
+async def upload_video_batch(files: list[UploadFile] = File(...)) -> list[VideoRecord]:
+    if not files or len(files) > 100:
+        raise HTTPException(status_code=400, detail="Choose between 1 and 100 video files.")
+    saved: list[VideoRecord] = []
+    try:
+        for file in files:
+            saved.append(await get_video_service().save_upload(file))
+        return saved
+    except (ValueError, UploadTooLargeError, VideoProbeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/presets", response_model=list[PresetRecord])
+def list_presets() -> list[PresetRecord]:
+    return get_database().list_presets()
+
+
+@router.post("/presets", response_model=PresetRecord, status_code=201)
+def create_preset(request: PresetCreate) -> PresetRecord:
+    return get_batch_manager().create_preset(request)
+
+
+@router.delete("/presets/{preset_id}", status_code=204)
+def delete_preset(preset_id: str) -> None:
+    try:
+        get_batch_manager().delete_preset(preset_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/batches", response_model=BatchRecord, status_code=202)
+def create_batch(request: BatchCreateRequest) -> BatchRecord:
+    try:
+        return get_batch_manager().create(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/batches", response_model=list[BatchRecord])
+def list_batches(limit: int = 50) -> list[BatchRecord]:
+    return get_batch_manager().list(min(max(limit, 1), 100))
+
+
+@router.post("/batches/{batch_id}/pause", response_model=BatchRecord)
+def pause_batch(batch_id: str) -> BatchRecord:
+    try:
+        return get_batch_manager().pause(batch_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/batches/{batch_id}/resume", response_model=BatchRecord)
+def resume_batch(batch_id: str) -> BatchRecord:
+    try:
+        return get_batch_manager().resume(batch_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/batches/{batch_id}/cancel", response_model=BatchRecord)
+def cancel_batch(batch_id: str) -> BatchRecord:
+    try:
+        return get_batch_manager().cancel(batch_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/comparisons", response_model=ComparisonRecord, status_code=202)
+def create_comparison(request: ComparisonCreate) -> ComparisonRecord:
+    try:
+        return get_comparison_manager().create(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/comparisons", response_model=list[ComparisonRecord])
+def list_comparisons(limit: int = 50) -> list[ComparisonRecord]:
+    return get_comparison_manager().list(min(max(limit, 1), 100))
+
+
+@router.get("/comparisons/{comparison_id}", response_model=ComparisonRecord)
+def get_comparison(comparison_id: str) -> ComparisonRecord:
+    record = get_comparison_manager().get(comparison_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Preview comparison not found.")
+    return record
+
+
+@router.post("/comparisons/{comparison_id}/cancel", response_model=ComparisonRecord)
+def cancel_comparison(comparison_id: str) -> ComparisonRecord:
+    try:
+        return get_comparison_manager().cancel(comparison_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.get("/videos/{video_id}", response_model=VideoRecord)
 def get_video(video_id: str) -> VideoRecord:
     video = get_database().get_video(video_id)
     if not video:
         raise HTTPException(status_code=404, detail="Video not found.")
-    return video
+    return get_video_service().ensure_diagnosis(video)
 
 
 @router.get("/videos/{video_id}/media")
@@ -92,6 +200,11 @@ async def youtube_inspect(request: YouTubeInspectRequest) -> YouTubeMetadata:
         return await asyncio.to_thread(get_youtube_service().inspect, request.url)
     except (ValueError, YouTubeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/videos/youtube/reliability", response_model=YouTubeReliabilityReport)
+def youtube_reliability() -> YouTubeReliabilityReport:
+    return get_youtube_service().reliability_report()
 
 
 @router.post("/playlists/inspect", response_model=PlaylistMetadata)
@@ -260,6 +373,25 @@ def cancel_job(job_id: str) -> JobRecord:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.post("/jobs/{job_id}/pause", response_model=JobRecord)
+def pause_job(job_id: str) -> JobRecord:
+    try:
+        return get_job_manager().pause(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/resume", response_model=JobRecord)
+def resume_job(job_id: str) -> JobRecord:
+    try:
+        return get_job_manager().resume(job_id)
+    except ValueError as exc:
+        detail = str(exc)
+        raise HTTPException(
+            status_code=404 if detail == "Job not found." else 409, detail=detail
+        ) from exc
+
+
 @router.get("/jobs/{job_id}/events")
 async def job_events(job_id: str) -> StreamingResponse:
     if not get_database().get_job(job_id):
@@ -275,7 +407,12 @@ async def job_events(job_id: str) -> StreamingResponse:
             if payload != previous:
                 yield f"event: progress\ndata: {payload}\n\n"
                 previous = payload
-            if job.status in {JobStatus.COMPLETE, JobStatus.FAILED, JobStatus.CANCELLED}:
+            if job.status in {
+                JobStatus.COMPLETE,
+                JobStatus.FAILED,
+                JobStatus.CANCELLED,
+                JobStatus.PAUSED,
+            }:
                 return
             yield ": keep-alive\n\n"
             await asyncio.sleep(0.5)
@@ -310,8 +447,10 @@ def _job_file(job_id: str, original: bool = False) -> FileResponse:
     path = ensure_within(value, get_video_service().settings.data_dir / "outputs")
     if not path.exists():
         raise HTTPException(status_code=410, detail="The local result file has been removed.")
-    filename = f"OhIc-{job_id[:8]}{'-original' if original else ''}.mp4"
-    return FileResponse(path, media_type="video/mp4", filename=filename)
+    suffix = ".mp4" if original else path.suffix.lower()
+    filename = f"OhIc-{job_id[:8]}{'-original' if original else ''}{suffix}"
+    media_type = "video/x-matroska" if suffix == ".mkv" else "video/mp4"
+    return FileResponse(path, media_type=media_type, filename=filename)
 
 
 @router.get("/jobs/{job_id}/result")

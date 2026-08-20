@@ -9,7 +9,7 @@ from app.schemas.video import (
     YouTubeDownloadStatus,
 )
 from app.services.videos import VideoService
-from app.services.youtube import YouTubeService
+from app.services.youtube import YouTubeError, YouTubeService
 from app.utils.files import validate_youtube_url
 
 
@@ -175,8 +175,16 @@ class YouTubeDownloadManager:
                     ),
                 )
             else:
+                failure_code = exc.code if isinstance(exc, YouTubeError) else "unexpected"
+                recovery_steps = (
+                    exc.recovery_steps
+                    if isinstance(exc, YouTubeError)
+                    else ["Run the YouTube Reliability Center check and retry."]
+                )
                 self._update(
                     download_id,
                     status=YouTubeDownloadStatus.FAILED,
                     error=str(exc)[:500],
+                    failure_code=failure_code,
+                    recovery_steps=recovery_steps,
                 )

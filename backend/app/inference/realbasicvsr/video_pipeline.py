@@ -16,6 +16,7 @@ from typing import Protocol
 import numpy as np
 
 from app.inference.realbasicvsr.chunking import recommended_window, temporal_windows
+from app.inference.realbasicvsr.scenes import SceneWindow, scene_aware_windows
 from app.jobs.runtime import JobRuntime
 from app.video.probe import probe_video
 
@@ -56,6 +57,7 @@ class RealBasicVSRRunStats:
     peak_rss_mb: float
     output_bytes: int
     audio_mode: str
+    scene_count: int
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True)
@@ -127,6 +129,10 @@ def run_experimental_pipeline(
     start_at: float = 0,
     duration: float | None = None,
     temp_root: Path | None = None,
+    input_filter: str | None = None,
+    output_fps: float | None = None,
+    scene_aware: bool = True,
+    scene_threshold: float = 0.35,
 ) -> RealBasicVSRRunStats:
     """Run bounded temporal inference without registering an application model."""
     runtime = runtime or JobRuntime()
@@ -143,7 +149,11 @@ def run_experimental_pipeline(
         )
     suggested_window, suggested_overlap = recommended_window(metadata.width, metadata.height)
     window_frames = window_frames or suggested_window
-    overlap_frames = suggested_overlap if overlap_frames is None else overlap_frames
+    overlap_frames = (
+        min(suggested_overlap, max(1, (window_frames - 1) // 2))
+        if overlap_frames is None
+        else overlap_frames
+    )
     if window_frames - 2 * overlap_frames < 1:
         raise ValueError("Window size must be larger than twice the temporal overlap.")
     model_width = metadata.width * engine.scale
@@ -155,7 +165,7 @@ def run_experimental_pipeline(
         target_width,
         target_height,
     )
-    fps = metadata.fps or 30.0
+    fps = output_fps or metadata.fps or 30.0
     total_frames = max(1, round(selected_duration * fps))
     output.parent.mkdir(parents=True, exist_ok=True)
     if temp_root:
@@ -166,6 +176,7 @@ def run_experimental_pipeline(
     encoding_seconds = 0.0
     frames_done = 0
     audio_mode = "none"
+    scene_count = 0
 
     with tempfile.TemporaryDirectory(
         prefix="ohic-realbasicvsr-", dir=temp_root
@@ -184,6 +195,8 @@ def run_experimental_pipeline(
         decoder_args += ["-i", str(source)]
         if duration is not None:
             decoder_args += ["-t", f"{selected_duration:.3f}"]
+        if input_filter:
+            decoder_args += ["-vf", input_filter]
         decoder_args += [
             "-map",
             "0:v:0",
@@ -250,20 +263,38 @@ def run_experimental_pipeline(
 
         try:
             assert encoder.stdin
-            for window in temporal_windows(decoded_frames(), window_frames, overlap_frames):
+            windows = (
+                scene_aware_windows(
+                    decoded_frames(), window_frames, overlap_frames, scene_threshold
+                )
+                if scene_aware
+                else (
+                    SceneWindow(0, window)
+                    for window in temporal_windows(
+                        decoded_frames(), window_frames, overlap_frames
+                    )
+                )
+            )
+            for scene_window in windows:
+                window = scene_window.window
+                scene_count = max(scene_count, scene_window.scene_index + 1)
                 if runtime.cancel.is_set():
                     raise InterruptedError("RealBasicVSR processing was cancelled.")
-                if len(window.frames) < 2:
-                    raise RuntimeError("RealBasicVSR requires a video with at least two frames.")
                 if progress:
                     progress(
                         "Restoring",
                         min(95.0, frames_done / max(1, total_frames) * 95),
-                        f"Window {window.index + 1} · frames {window.start_frame + 1}–"
+                        f"Scene {scene_window.scene_index + 1} · window {window.index + 1} · "
+                        f"frames {window.start_frame + 1}–"
                         f"{window.start_frame + len(window.frames)}",
                     )
                 inference_started = time.perf_counter()
-                restored = engine.enhance_sequence(window.frames, runtime.cancel)
+                inference_frames = (
+                    window.frames
+                    if len(window.frames) >= 2
+                    else (window.frames[0], window.frames[0])
+                )
+                restored = engine.enhance_sequence(inference_frames, runtime.cancel)
                 inference_seconds += time.perf_counter() - inference_started
                 encode_started = time.perf_counter()
                 for frame in restored[window.emit_start : window.emit_end]:
@@ -411,4 +442,5 @@ def run_experimental_pipeline(
         peak_rss_mb=_peak_rss_mb(),
         output_bytes=output.stat().st_size,
         audio_mode=audio_mode,
+        scene_count=scene_count,
     )

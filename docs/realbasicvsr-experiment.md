@@ -199,8 +199,10 @@ FFmpeg remains the only video plumbing layer:
 3. Python normalizes RGB uint8 to `[0, 1]`, runs sequence inference, clamps to `[0, 1]`, and writes
    restored RGB uint8 frames to a second pipe.
 4. FFmpeg encodes H.264/yuv420p and applies optional Lanczos final sizing.
-5. The first source audio stream is copied when MP4-compatible; otherwise it is encoded to AAC.
-6. The finalized fast-start MP4 is moved into place only after every stage succeeds.
+5. Scene-aware windowing resets overlap at hard cuts so propagated features never cross scenes.
+6. Final mux maps all audio/chapters/metadata into MP4 or preserves every compatible source track
+   in MKV archive mode.
+7. The finalized result is moved into place only after every stage succeeds.
 
 Output FPS equals FFprobe's average source FPS and frame count is preserved. The current raw-frame
 prototype produces constant-frame-rate output, so exact variable-frame-rate timestamps are not
@@ -283,5 +285,6 @@ hallucination, boundaries, and color. Optional `--device`, `--chunk-frames`, `--
 and `--allow-large-input` arguments match the isolated experiment.
 
 Watch-while-enhancing remains unsupported for RealBasicVSR until independent temporal windows are
-visually proven not to introduce objectionable boundary artifacts. Hard-process resume is also
-unsupported because recurrent state and context are not persisted.
+visually proven not to introduce objectionable boundary artifacts. Full and range jobs are split
+into durable checkpoints; after a hard-process restart, completed checkpoint files are verified and
+reused while the interrupted checkpoint is regenerated from its scene boundary-aware input range.

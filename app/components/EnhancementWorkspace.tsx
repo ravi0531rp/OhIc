@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { EnhancementModel, JobKind, JobRecord, QualityPreset, ResolutionTarget, VideoRecord } from "../lib/types";
 import { ChevronIcon, PlayIcon, SparkIcon } from "./Icons";
-import { mediaUrl } from "../lib/api";
+import { api, mediaUrl } from "../lib/api";
 
 type Props = {
   video: VideoRecord;
@@ -20,6 +20,23 @@ type Props = {
     timestamp: number,
     trimStart: number,
     trimEnd?: number,
+    output?: {
+      output_container: "mp4" | "mkv";
+      track_policy: "compatible" | "preserve";
+      preserve_metadata: boolean;
+      preserve_chapters: boolean;
+      scan_treatment: "auto" | "off" | "deinterlace" | "ivtc";
+      resource_policy: "auto" | "conservative" | "performance";
+      memory_limit_mb?: number;
+      scene_aware: boolean;
+      scene_threshold: number;
+    },
+  ) => void;
+  onMultiPreview: (
+    target: ResolutionTarget,
+    modelId: string,
+    timestamp: number,
+    scanTreatment: "auto" | "off" | "deinterlace" | "ivtc",
   ) => void;
 };
 
@@ -40,7 +57,7 @@ function formatBytes(bytes: number) {
   return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
 }
 
-export function EnhancementWorkspace({ video, models, initialJob, busy, onRun }: Props) {
+export function EnhancementWorkspace({ video, models, initialJob, busy, onRun, onMultiPreview }: Props) {
   const [selected, setSelected] = useState(
     video.targets.find(
       (target) =>
@@ -57,6 +74,19 @@ export function EnhancementWorkspace({ video, models, initialJob, busy, onRun }:
   );
   const [trimStart, setTrimStart] = useState(initialJob?.trim_start ?? 0);
   const [trimEnd, setTrimEnd] = useState(initialJob?.trim_end ?? video.metadata.duration);
+  const [preserveTracks, setPreserveTracks] = useState(
+    initialJob?.track_policy === "preserve",
+  );
+  const [presetSaved, setPresetSaved] = useState(false);
+  const [scanTreatment, setScanTreatment] = useState<"auto" | "off" | "deinterlace" | "ivtc">(
+    initialJob?.scan_treatment ?? "auto",
+  );
+  const [resourcePolicy, setResourcePolicy] = useState<"auto" | "conservative" | "performance">(
+    initialJob?.resource_policy ?? "auto",
+  );
+  const [memoryLimit, setMemoryLimit] = useState<number | undefined>(initialJob?.memory_limit_mb);
+  const [sceneAware, setSceneAware] = useState(initialJob?.scene_aware ?? true);
+  const [sceneThreshold, setSceneThreshold] = useState(initialJob?.scene_threshold ?? 0.35);
   const playerRef = useRef<HTMLVideoElement>(null);
   const selectedModel = models.find((model) => model.identifier === modelId) ?? models[0];
   const modelUnavailable = Boolean(
@@ -83,6 +113,37 @@ export function EnhancementWorkspace({ video, models, initialJob, busy, onRun }:
     else setTrimEnd(Math.max(value, trimStart + 0.1));
   };
 
+  const applyDiagnosisRecipe = () => {
+    const recipe = video.diagnosis?.recipe;
+    if (!recipe) return;
+    const target = video.targets.find((item) => item.height === recipe.target_height);
+    if (target) setSelected(target);
+    setPreset(recipe.preset);
+    if (models.some((model) => model.identifier === recipe.model_id)) {
+      setModelId(recipe.model_id);
+    }
+    setScanTreatment(recipe.deinterlace === "auto" ? "auto" : "off");
+  };
+
+  const savePreset = async () => {
+    const name = window.prompt("Name this enhancement preset");
+    if (!name?.trim()) return;
+    await api.createPreset({
+      name: name.trim(),
+      target_height: selected.height,
+      quality: preset,
+      model_id: selectedModel.identifier,
+      output_container: preserveTracks ? "mkv" : "mp4",
+      track_policy: preserveTracks ? "preserve" : "compatible",
+      scan_treatment: scanTreatment,
+      resource_policy: resourcePolicy,
+      memory_limit_mb: memoryLimit,
+      scene_aware: sceneAware,
+      scene_threshold: sceneThreshold,
+    });
+    setPresetSaved(true);
+  };
+
   return (
     <main className="workspace-grid">
       <section className="video-stage-column">
@@ -106,8 +167,26 @@ export function EnhancementWorkspace({ video, models, initialJob, busy, onRun }:
             <div><span>Duration</span><strong>{formatTime(video.metadata.duration)}</strong></div>
             <div><span>Size</span><strong>{formatBytes(video.metadata.file_size)}</strong></div>
             <div><span>Range</span><strong>{video.metadata.dynamic_range}</strong></div>
+            <div><span>Media</span><strong>{video.metadata.tracks.filter((track) => track.kind === "audio").length} audio · {video.metadata.tracks.filter((track) => track.kind === "subtitle").length} subs</strong></div>
           </div>
         </div>
+
+        {video.diagnosis && (
+          <div className="source-diagnosis">
+            <div className="diagnosis-heading">
+              <div><span className="eyebrow">Source diagnosis · {video.diagnosis.confidence} confidence</span><h3>{video.diagnosis.verdict}</h3></div>
+              <button disabled={busy} onClick={applyDiagnosisRecipe}>Apply recipe</button>
+            </div>
+            <div className="diagnosis-body">
+              <div className="diagnosis-issues">
+                {video.diagnosis.issues.length ? video.diagnosis.issues.map((issue) => (
+                  <span key={issue.code} className={issue.severity}><i /> <strong>{issue.title}</strong><small>{issue.detail}</small></span>
+                )) : <span className="healthy"><i /><strong>No obvious source defects</strong><small>Use a restrained upscale to preserve the original character.</small></span>}
+              </div>
+              <div className="diagnosis-recipe"><span>Recommended recipe</span><strong>{video.diagnosis.recipe.summary}</strong><small>{video.diagnosis.recipe.reasons.join(" · ")}</small></div>
+            </div>
+          </div>
+        )}
 
         <div className="preview-section">
           <div>
@@ -214,26 +293,38 @@ export function EnhancementWorkspace({ video, models, initialJob, busy, onRun }:
           <div className="advanced-grid">
             <span>AI model<strong>{selectedModel?.display_name ?? "Real-ESRGAN ×2"}</strong></span>
             <span>Final resize<strong>Lanczos</strong></span>
-            <span>Output<strong>H.264 · MP4</strong></span>
+            <span>Output<strong>{preserveTracks ? "H.264 · MKV archive" : "H.264 · MP4"}</strong></span>
             <span>Workload<strong>{workload.level}</strong></span>
           </div>
+          <label className="track-policy" htmlFor="preserve-tracks">
+            <input id="preserve-tracks" checked={preserveTracks} disabled={busy} type="checkbox" onChange={(event) => setPreserveTracks(event.target.checked)} />
+            Preserve every media track
+            <small>Use MKV to copy all audio, subtitles, attachments, chapters, and metadata.</small>
+          </label>
+          <label className="scan-treatment" htmlFor="scan-treatment">Scan treatment<select id="scan-treatment" disabled={busy} value={scanTreatment} onChange={(event) => setScanTreatment(event.target.value as typeof scanTreatment)}><option value="auto">Auto-detect</option><option value="off">Keep original scan</option><option value="deinterlace">Motion-adaptive deinterlace</option><option value="ivtc" disabled={video.metadata.fps < 29 || video.metadata.fps > 31}>Inverse telecine (29.97/30 FPS)</option></select></label>
+          <label className="scan-treatment" htmlFor="resource-policy">Resource mode<select id="resource-policy" disabled={busy} value={resourcePolicy} onChange={(event) => setResourcePolicy(event.target.value as typeof resourcePolicy)}><option value="auto">Adaptive</option><option value="conservative">Conservative</option><option value="performance">Performance</option></select></label>
+          <label className="scan-treatment" htmlFor="memory-limit">Memory ceiling<select id="memory-limit" disabled={busy} value={memoryLimit ?? ""} onChange={(event) => setMemoryLimit(event.target.value ? Number(event.target.value) : undefined)}><option value="">Automatic</option><option value="2048">2 GB</option><option value="4096">4 GB</option><option value="8192">8 GB</option><option value="16384">16 GB</option></select></label>
+          {initialJob?.resource_allocation && <p className="resource-plan">Active plan · {initialJob.resource_allocation.tile_size}px tiles · {initialJob.resource_allocation.temporal_window}-frame temporal window<br />{initialJob.resource_allocation.rationale}</p>}
+          {selectedModel?.temporal && <div className="scene-controls"><label htmlFor="scene-aware"><input id="scene-aware" checked={sceneAware} disabled={busy} type="checkbox" onChange={(event) => setSceneAware(event.target.checked)} /> Reset temporal context at scene cuts</label><label htmlFor="scene-threshold">Cut sensitivity <input id="scene-threshold" disabled={busy || !sceneAware} type="range" min="0.15" max="0.65" step="0.05" value={sceneThreshold} onChange={(event) => setSceneThreshold(Number(event.target.value))} /><strong>{sceneThreshold.toFixed(2)}</strong></label></div>}
+          <button className="save-preset" disabled={busy} onClick={() => void savePreset()}>{presetSaved ? "Preset saved" : "Save these settings as a preset"}</button>
           <p>AI enhancement creates plausible detail; it should not be used as forensic evidence.</p>
         </details>
 
         <div className="action-stack">
-          <button className="primary-action" disabled={busy || modelUnavailable} onClick={() => onRun("preview", selected, preset, selectedModel.identifier, timestamp, 0)}>
+          <button className="lab-action" disabled={busy || modelUnavailable} onClick={() => onMultiPreview(selected, selectedModel.identifier, timestamp, scanTreatment)}><SparkIcon size={15} /> Compare Fast · Balanced · Maximum</button>
+          <button className="primary-action" disabled={busy || modelUnavailable} onClick={() => onRun("preview", selected, preset, selectedModel.identifier, timestamp, 0, undefined, { output_container: "mp4", track_policy: "compatible", preserve_metadata: true, preserve_chapters: true, scan_treatment: scanTreatment, resource_policy: resourcePolicy, memory_limit_mb: memoryLimit, scene_aware: sceneAware, scene_threshold: sceneThreshold })}>
             <PlayIcon size={18} fill="currentColor" /> {busy ? "Preparing…" : "Preview enhancement"}
             <span>5 sec</span>
           </button>
-          <button className="secondary-action" disabled={busy || modelUnavailable} onClick={() => onRun("full", selected, preset, selectedModel.identifier, timestamp, customRange ? trimStart : 0, customRange ? trimEnd : undefined)}>
+          <button className="secondary-action" disabled={busy || modelUnavailable} onClick={() => onRun("full", selected, preset, selectedModel.identifier, timestamp, customRange ? trimStart : 0, customRange ? trimEnd : undefined, { output_container: preserveTracks ? "mkv" : "mp4", track_policy: preserveTracks ? "preserve" : "compatible", preserve_metadata: true, preserve_chapters: true, scan_treatment: scanTreatment, resource_policy: resourcePolicy, memory_limit_mb: memoryLimit, scene_aware: sceneAware, scene_threshold: sceneThreshold })}>
             {customRange ? "Enhance selected range" : "Enhance full video"} <small>{workload.frames.toLocaleString()} frames</small>
           </button>
-          <button className={`stream-action ${!selectedModel.supports_stream ? "unsupported" : ""}`} disabled={busy || modelUnavailable || !selectedModel.supports_stream} onClick={() => onRun("stream", selected, preset, selectedModel.identifier, timestamp, customRange ? trimStart : 0, customRange ? trimEnd : undefined)}>
+          <button className={`stream-action ${!selectedModel.supports_stream ? "unsupported" : ""}`} disabled={busy || modelUnavailable || !selectedModel.supports_stream} onClick={() => onRun("stream", selected, preset, selectedModel.identifier, timestamp, customRange ? trimStart : 0, customRange ? trimEnd : undefined, { output_container: "mp4", track_policy: "compatible", preserve_metadata: true, preserve_chapters: true, scan_treatment: scanTreatment, resource_policy: resourcePolicy, memory_limit_mb: memoryLimit, scene_aware: sceneAware, scene_threshold: sceneThreshold })}>
             <span><PlayIcon size={15} fill="currentColor" /> Watch while enhancing</span>
             <small>{selectedModel.supports_stream ? "Plays in rolling parts as they finish" : "Not available for this experimental engine"}</small>
           </button>
         </div>
-        <p className="output-note">H.264 MP4 · source audio retained when available</p>
+        <p className="output-note">{preserveTracks ? "MKV · every source track retained" : "Browser-compatible MP4 · all audio tracks retained"}</p>
       </aside>
     </main>
   );

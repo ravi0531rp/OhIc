@@ -4,7 +4,7 @@ import subprocess
 from fractions import Fraction
 from pathlib import Path
 
-from app.schemas.video import VideoMetadata
+from app.schemas.video import MediaTrack, VideoMetadata
 
 
 class VideoProbeError(RuntimeError):
@@ -59,6 +59,17 @@ def parse_ffprobe(payload: dict, file_size: int) -> VideoMetadata:
         frame_count = round(duration * fps)
     tags = video.get("color_transfer") or ""
     dynamic_range = "HDR" if tags in {"smpte2084", "arib-std-b67"} else "SDR"
+    tracks = [
+        MediaTrack(
+            index=int(stream.get("index", index)),
+            kind=str(stream.get("codec_type") or "data"),
+            codec=str(stream.get("codec_name") or "unknown").upper(),
+            language=(stream.get("tags") or {}).get("language"),
+            title=(stream.get("tags") or {}).get("title"),
+            channels=stream.get("channels"),
+        )
+        for index, stream in enumerate(streams)
+    ]
     return VideoMetadata(
         width=width,
         height=height,
@@ -73,6 +84,10 @@ def parse_ffprobe(payload: dict, file_size: int) -> VideoMetadata:
         file_size=file_size,
         pixel_format=video.get("pix_fmt"),
         dynamic_range=dynamic_range,
+        field_order=str(video.get("field_order") or "progressive").lower(),
+        tracks=tracks,
+        chapters=len(payload.get("chapters") or []),
+        title=(fmt.get("tags") or {}).get("title"),
     )
 
 
@@ -83,6 +98,7 @@ def probe_video(path: Path, ffprobe: str = "ffprobe") -> VideoMetadata:
         "error",
         "-show_streams",
         "-show_format",
+        "-show_chapters",
         "-print_format",
         "json",
         str(path),

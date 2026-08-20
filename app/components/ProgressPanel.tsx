@@ -1,9 +1,14 @@
 "use client";
 
 import type { JobRecord } from "../lib/types";
-import { SparkIcon, XIcon } from "./Icons";
+import { PauseIcon, PlayIcon, SparkIcon, XIcon } from "./Icons";
 
-type Props = { job: JobRecord; onCancel: () => void };
+type Props = {
+  job: JobRecord;
+  onCancel: () => void;
+  onPause: () => void;
+  onResume: () => void;
+};
 
 function timeLabel(seconds?: number) {
   if (seconds == null || !Number.isFinite(seconds)) return "Calculating…";
@@ -13,9 +18,9 @@ function timeLabel(seconds?: number) {
   return hours ? `${hours} hr ${minutes} min` : `${minutes} min`;
 }
 
-export function ProgressPanel({ job, onCancel }: Props) {
+export function ProgressPanel({ job, onCancel, onPause, onResume }: Props) {
   const { progress } = job;
-  const active = !["complete", "failed", "cancelled"].includes(job.status);
+  const active = !["complete", "failed", "cancelled", "paused"].includes(job.status);
   return (
     <section className="progress-panel" aria-live="polite">
       <div className="progress-orb"><SparkIcon size={21} /></div>
@@ -34,7 +39,14 @@ export function ProgressPanel({ job, onCancel }: Props) {
           <span>{progress.eta_seconds ? `${timeLabel(progress.eta_seconds)} remaining` : timeLabel(progress.elapsed_seconds)}</span>
         </div>
       </div>
-      {active && <button className="icon-button cancel" aria-label="Cancel enhancement" onClick={onCancel}><XIcon size={18} /></button>}
+      <div className="progress-actions">
+        {job.status === "paused" ? (
+          <button className="progress-resume" onClick={onResume}><PlayIcon size={15} /> Resume</button>
+        ) : active ? (
+          <button className="progress-pause" onClick={onPause}><PauseIcon size={15} /> Pause</button>
+        ) : null}
+        {(active || job.status === "paused") && <button className="icon-button cancel" aria-label="Cancel enhancement" onClick={onCancel}><XIcon size={18} /></button>}
+      </div>
     </section>
   );
 }

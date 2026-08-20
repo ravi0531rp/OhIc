@@ -20,6 +20,17 @@ export type VideoMetadata = {
   file_size: number;
   pixel_format?: string;
   dynamic_range: string;
+  field_order: string;
+  tracks: Array<{
+    index: number;
+    kind: string;
+    codec: string;
+    language?: string;
+    title?: string;
+    channels?: number;
+  }>;
+  chapters: number;
+  title?: string;
 };
 
 export type VideoRecord = {
@@ -33,6 +44,20 @@ export type VideoRecord = {
   title?: string;
   thumbnail?: string;
   uploader?: string;
+  diagnosis?: {
+    verdict: string;
+    confidence: string;
+    issues: Array<{ code: string; severity: string; title: string; detail: string }>;
+    recipe: {
+      name: string;
+      summary: string;
+      target_height: number;
+      preset: QualityPreset;
+      model_id: string;
+      deinterlace: "off" | "auto";
+      reasons: string[];
+    };
+  };
 };
 
 export type HardwareInfo = {
@@ -70,6 +95,7 @@ export type JobStatus =
   | "preparing"
   | "processing"
   | "encoding"
+  | "paused"
   | "complete"
   | "failed"
   | "cancelled";
@@ -115,7 +141,41 @@ export type JobRecord = {
   trim_start: number;
   trim_end?: number;
   playlist_id?: string;
+  output_container: "mp4" | "mkv";
+  track_policy: "compatible" | "preserve";
+  scan_treatment: "auto" | "off" | "deinterlace" | "ivtc";
+  resource_policy: "auto" | "conservative" | "performance";
+  memory_limit_mb?: number;
+  resource_allocation?: {
+    policy: string;
+    tile_size: number;
+    temporal_window: number;
+    max_parallel_jobs: number;
+    available_memory_mb: number;
+    memory_pressure: string;
+    rationale: string;
+  };
+  scene_aware: boolean;
+  scene_threshold: number;
+  preserve_metadata: boolean;
+  preserve_chapters: boolean;
   stream?: StreamState;
+  checkpoint?: {
+    version: number;
+    source_fingerprint: string;
+    settings_signature: string;
+    segment_seconds: number;
+    segments: Array<{
+      index: number;
+      start: number;
+      end: number;
+      status: "queued" | "processing" | "ready";
+      progress: number;
+      output_name: string;
+      checksum?: string;
+    }>;
+  };
+  recovered_after_restart: boolean;
   progress: JobProgress;
   created_at: string;
   started_at?: string;
@@ -154,6 +214,23 @@ export type YouTubeDownloadRecord = {
   created_at: string;
   video?: VideoRecord;
   error?: string;
+  failure_code?: string;
+  recovery_steps: string[];
+};
+
+export type YouTubeReliabilityReport = {
+  status: "ready" | "degraded";
+  yt_dlp_version: string;
+  node_version?: string;
+  cookies_configured: boolean;
+  po_token_provider: boolean;
+  checks: Array<{
+    id: string;
+    label: string;
+    status: "ready" | "warning" | "optional";
+    detail: string;
+  }>;
+  recommendations: string[];
 };
 
 export type StorageItem = {
@@ -216,6 +293,65 @@ export type PlaylistRecord = {
     progress: number;
     video_id?: string;
     job_id?: string;
+    error?: string;
+  }>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PresetRecord = {
+  id: string;
+  name: string;
+  target_height?: number;
+  quality: QualityPreset;
+  model_id: string;
+  output_container: "mp4" | "mkv";
+  track_policy: "compatible" | "preserve";
+  scan_treatment: "auto" | "off" | "deinterlace" | "ivtc";
+  resource_policy: "auto" | "conservative" | "performance";
+  memory_limit_mb?: number;
+  scene_aware: boolean;
+  scene_threshold: number;
+  created_at: string;
+};
+
+export type BatchRecord = {
+  id: string;
+  name: string;
+  status: "queued" | "running" | "paused" | "complete" | "partial" | "failed" | "cancelled";
+  progress: number;
+  preset_id?: string;
+  items: Array<{
+    id: string;
+    video_id: string;
+    name: string;
+    job_id?: string;
+    status: string;
+    progress: number;
+    error?: string;
+  }>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ComparisonRecord = {
+  id: string;
+  video_id: string;
+  timestamp: number;
+  status: "queued" | "running" | "complete" | "partial" | "failed" | "cancelled";
+  progress: number;
+  items: Array<{
+    id: string;
+    label: string;
+    target_width: number;
+    target_height: number;
+    preset: QualityPreset;
+    model_id: string;
+    scan_treatment: "auto" | "off" | "deinterlace" | "ivtc";
+    job_id?: string;
+    status: string;
+    progress: number;
+    output_url?: string;
     error?: string;
   }>;
   created_at: string;

@@ -4,7 +4,7 @@
 
 OhIc is a free, open-source video enhancement workspace. Import a file or permitted YouTube video,
 choose the enhancement engine, detail, and output size, preview the result, and restore and upscale
-it locally. The final result is a browser-friendly MP4 with source audio when available.
+it locally. Export a browser-friendly MP4 or an archival MKV that preserves every media track.
 
 This README is for people using OhIc. If you are installing it for development, changing the
 code, integrating the API, or tuning its configuration, see the
@@ -27,11 +27,13 @@ code, integrating the API, or tuning its configuration, see the
   download through enhancement. All videos are selected by default.
 - Review resolution, frame rate, duration, file size, codec, aspect ratio, and SDR/HDR detection
   before processing.
+- Get a plain-language source diagnosis and apply its recommended enhancement recipe.
 - Choose an aspect-safe recommended output such as 720p, 1080p, 1440p, or 4K.
 - Choose fast frame-by-frame Real-ESRGAN or experimental, temporally aware RealBasicVSR for
   supported videos.
 - Pick **Fast**, **Balanced**, or **Maximum** quality.
 - Test the exact enhancement pipeline on a five-second preview.
+- Open Preview Lab to compare the original with Fast, Balanced, and Maximum passes at once.
 - Enhance the full video or save only a custom start-to-end range.
 - Watch an enhanced video before the entire job finishes with adaptive, independently playable
   parts.
@@ -39,7 +41,15 @@ code, integrating the API, or tuning its configuration, see the
   time, and ETA.
 - Leave an active session and reopen it from History without losing the chosen resolution,
   quality preset, preview point, range, or live progress.
-- Stop queued or running downloads, enhancements, and playlist batches.
+- Pause and resume queued or running enhancements safely. After a restart, interrupted work is
+  recovered as paused and completed checkpoints are reused.
+- Upload up to 100 local videos into a persistent batch queue and reuse named presets.
+- Auto-detect interlaced sources, use motion-adaptive deinterlacing, or restore film cadence with
+  inverse telecine on compatible 29.97/30 FPS sources.
+- Let adaptive resource management select safe tile and temporal-window sizes, or choose a
+  Conservative/Performance policy and a memory ceiling.
+- Preserve multiple audio tracks, subtitles, attachments, chapters, and metadata in MKV exports.
+- Stop queued or running downloads, enhancements, local batches, and playlist batches.
 - Compare original and enhanced video with a draggable wipe or side-by-side view, synchronized
   playback, zoom, and frame stepping.
 - Select and delete saved uploads, YouTube downloads, results, previews, and streaming parts from
@@ -75,23 +85,27 @@ recommended for longer videos.
 
 ## Install and start
 
-On macOS, install the prerequisites:
+On macOS or Linux, this one command downloads OhIc, installs missing prerequisites, creates its
+isolated environment, builds the interface, verifies the installation, starts the app, and opens
+it in your browser:
 
 ```bash
-brew install ffmpeg uv node
+curl -fsSL https://raw.githubusercontent.com/ravi0531rp/OhIc/main/install.sh | bash
 ```
 
-Then download OhIc and run its setup:
+FFmpeg is installed through the computer's package manager, so the first installation may request
+your administrator password. OhIc and its other tools stay in your user-data directory. Keep the
+Terminal window running while you use OhIc; press `Control-C` to stop it.
+
+After installation, start it again from any directory with:
 
 ```bash
-git clone <your-ohic-repository-url>
-cd OhIc
-./scripts/setup.sh
-./scripts/start.sh
+ohic
 ```
 
-Open [http://localhost:3000](http://localhost:3000). Keep the Terminal window running while you
-use OhIc. Press `Control-C` in that window to stop it.
+Use `ohic --update` to install the latest version or `ohic --doctor` to check the local tools.
+The manual repository setup remains available in the
+[developer guide](DEVELOPER_README.md#setup-from-a-fresh-clone).
 
 The first run with an engine downloads its official checkpoint. Validated models are cached
 locally for later jobs.
@@ -124,12 +138,36 @@ For platform-specific setup, manual commands, Docker, or non-default ports, foll
    - **Enhance selected range** processes and saves only your chosen timestamps.
    - **Watch while enhancing** starts playback as soon as the first enhanced part is ready.
 
-9. Download the completed MP4 from the result view.
+9. Download the completed MP4, or enable **Preserve every media track** for an archival MKV.
 
-RealBasicVSR supports previews, complete videos, and custom timestamp ranges. It does not yet
-support **Watch while enhancing**, playlists, sources above 720p, or resuming a partially processed
-job after the backend stops. OhIc disables unsupported actions instead of silently switching the
-engine.
+RealBasicVSR supports previews, complete videos, custom timestamp ranges, crash-safe checkpoints,
+adaptive temporal windows, and scene-cut-aware context. It does not yet support **Watch while
+enhancing**, playlists, or sources above 720p. OhIc disables unsupported actions instead of
+silently switching the engine.
+
+### Diagnose, deinterlace, and preserve the source
+
+After import, **Source diagnosis** explains likely low resolution, compression, interlacing, low
+frame rate, or HDR concerns. **Apply recipe** selects a conservative target, engine, quality, and
+scan treatment. Advanced details let you override scan treatment and resource policy.
+
+Browser-compatible MP4 exports retain all audio tracks plus chapters and metadata. Enable
+**Preserve every media track** for MKV, which copies compatible audio, subtitle, attachment, data,
+chapter, and container metadata streams without converting them. The enhanced video stream remains
+H.264.
+
+### Compare several previews
+
+Choose **Compare Fast · Balanced · Maximum** to open Preview Lab. OhIc runs the same five-second
+moment through three linked jobs and shows them beside the original as each becomes ready. Preview
+Lab sessions and their jobs are stored locally, so their results remain available in History.
+
+### Queue local files and save presets
+
+Select or drop several files at once to create a local batch. Choose a built-in quality or a named
+preset before import. Open **Batch queue** to pause, resume, stop, inspect progress, or open a
+completed item. In any single-video workspace, Advanced details can save the current target,
+engine, quality, container, scan, scene, and resource settings as a reusable preset.
 
 ### Select only part of a video
 
@@ -182,11 +220,12 @@ next part is ready.
 
 ## Track, reopen, and stop work
 
-The top navigation provides three persistent views:
+The top navigation provides four persistent views:
 
 - **History** lists preview, full-video, custom-range, playlist, and watch-while-enhancing jobs.
   Open any row to return to the exact session. Active rows show **View live** and a **Stop** button.
 - **Playlists** preserves playlist batches and each selected video's state.
+- **Batch queue** preserves local multi-file batches and group controls.
 - **Storage** lists the local files managed by OhIc and their disk usage.
 
 Only one enhancement runs at a time. Additional jobs wait in the queue. Stopping a queued job
@@ -194,8 +233,10 @@ prevents it from starting; stopping a running job terminates its active media pr
 its incomplete final output. Already playable streaming parts may remain until you delete them
 from Storage.
 
-History and playlist metadata survive normal app restarts. A job that is actively processing does
-not resume after the local engine itself is stopped or the computer is restarted.
+History, local batches, presets, Preview Labs, and playlist metadata survive app restarts. If the
+engine or computer stops during enhancement, OhIc marks the interrupted job **Recovered after
+restart**. Resume it from History: full-video jobs reuse verified 30-second checkpoints,
+watch-while-enhancing jobs reuse ready parts, and short previews restart safely.
 
 ## Manage local storage
 
@@ -249,9 +290,10 @@ cd ..
 ./scripts/start.sh
 ```
 
-YouTube changes frequently. Some videos require sign-in or a YouTube PO token and cannot be
-downloaded by OhIc's anonymous local downloader. OhIc automatically tries several compatible
-formats and abandons unusably throttled streams instead of appearing stuck.
+Open **YouTube Reliability Center** in the YouTube importer to verify yt-dlp, Node.js challenge
+support, cookies configuration, and optional PO-token-provider availability. Failed downloads show
+a machine-readable failure category and recovery steps. OhIc automatically tries several
+compatible formats and abandons unusably throttled streams instead of appearing stuck.
 
 ### The first enhancement cannot download the AI model
 
@@ -280,17 +322,18 @@ inspection—are in the [developer troubleshooting guide](DEVELOPER_README.md#tr
 
 ## Current limitations
 
-- Output is H.264 video with optional AAC audio in an MP4 container.
-- Subtitle streams, attachments, chapters, multiple audio tracks, HDR-preserving output, and
-  source metadata are not carried into the result.
+- Enhanced output video is H.264. MP4 transcodes audio to AAC for compatibility; MKV archive mode
+  copies source media tracks but browser playback support varies, so it is primarily a download.
 - HDR sources are detected, but enhancement currently passes through an 8-bit RGB pipeline and
   produces SDR output.
 - RealBasicVSR is experimental, limited to 720p input, and unavailable for playlists and
   watch-while-enhancing.
 - Playlist imports are limited to the first 100 available entries and use each video's recommended
   resolution; per-item resolution and timestamp ranges are not currently configurable.
-- YouTube sign-in, cookies, and PO-token configuration are not exposed in the app.
-- Enhancement runs in the local backend process and does not survive that process being stopped.
+- The app does not collect YouTube credentials. Cookies are an optional developer configuration,
+  and PO-token providers are installed separately when a source requires them.
+- Checkpoint files increase temporary output storage until a completed or cancelled job is cleaned
+  from Storage.
 - Only one enhancement, one standalone YouTube download, and one playlist workflow are dispatched
   at a time in their respective queues. They can still contend for disk, network, and CPU.
 
