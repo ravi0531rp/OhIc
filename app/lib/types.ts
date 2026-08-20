@@ -357,3 +357,93 @@ export type ComparisonRecord = {
   created_at: string;
   updated_at: string;
 };
+
+export type ProStatus = {
+  state: "not_installed" | "installing" | "ready" | "error";
+  supported: boolean;
+  platform: string;
+  progress: number;
+  stage: string;
+  detail: string;
+  qwen_model: string;
+  whisper_model: string;
+  estimated_download_bytes: number;
+  installed_at?: string;
+  error?: string;
+};
+
+export type TranscriptSegment = {
+  id: string;
+  start: number;
+  end: number;
+  text: string;
+  words: Array<{ text: string; start: number; end: number; confidence?: number }>;
+};
+
+export type SubjectRecord = {
+  id: string;
+  label: string;
+  kind: "person" | "object";
+  color: string;
+  identity_id?: string;
+  appearances: Array<{
+    start: number;
+    end: number;
+    box: { x: number; y: number; width: number; height: number };
+    confidence: number;
+  }>;
+  thumbnail_url?: string;
+};
+
+export type VideoAnalysis = {
+  id: string;
+  video_id: string;
+  video_name?: string;
+  status: "queued" | "transcribing" | "tracking" | "indexing" | "ready" | "failed" | "cancelled";
+  progress: number;
+  stage: string;
+  transcript_language?: string;
+  transcript_segments: TranscriptSegment[];
+  subjects: SubjectRecord[];
+  keyframes: Array<{ id: string; timestamp: number; image_url: string }>;
+  subtitle_url?: string;
+  created_at: string;
+  updated_at: string;
+  warnings: string[];
+  error?: string;
+};
+
+export type IdentityRecord = {
+  id: string;
+  name: string;
+  notes: string;
+  color: string;
+  reference_thumbnail_url?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EvidenceCitation = {
+  start: number;
+  end: number;
+  label: string;
+  kind: "transcript" | "subject" | "frame" | "metadata";
+  image_url?: string;
+};
+
+export type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  citations: EvidenceCitation[];
+  tool_calls: Array<{ name: string; arguments: Record<string, unknown>; result_count: number }>;
+  created_at: string;
+};
+
+export type ChatSession = {
+  id: string;
+  analysis_id: string;
+  messages: ChatMessage[];
+  created_at: string;
+  updated_at: string;
+};

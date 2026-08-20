@@ -24,13 +24,16 @@ class Settings(BaseSettings):
     stale_temp_hours: int = 24
     checkpoint_seconds: float = Field(default=30.0, ge=5.0, le=300.0)
     youtube_cookies_file: Path | None = None
+    pro_test_mode: bool = False
+    pro_qwen_model: str | None = None
+    pro_whisper_model: str | None = None
 
     @property
     def resolved_model_dir(self) -> Path:
         return self.model_dir or self.data_dir / "models"
 
     def ensure_directories(self) -> None:
-        for name in ("uploads", "downloads", "jobs", "outputs", "temp"):
+        for name in ("uploads", "downloads", "jobs", "outputs", "temp", "intelligence"):
             (self.data_dir / name).mkdir(parents=True, exist_ok=True)
         self.resolved_model_dir.mkdir(parents=True, exist_ok=True)
 

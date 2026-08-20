@@ -54,6 +54,8 @@ code, integrating the API, or tuning its configuration, see the
   playback, zoom, and frame stepping.
 - Select and delete saved uploads, YouTube downloads, results, previews, and streaming parts from
   the Storage panel.
+- Optionally add **Pro Intelligence** for automatic local subtitles, multi-person tracking,
+  remembered user-assigned names, transcript search, and timestamp-grounded video chat.
 
 ## Privacy and network use
 
@@ -64,7 +66,14 @@ file locations—not copies of your video bytes.
 Network access is used only when you ask OhIc to:
 
 - inspect or download a YouTube video or playlist; or
-- download an official AI model the first time you select its engine.
+- download an official enhancement model the first time you select its engine; or
+- download the optional Pro Intelligence bundle after you explicitly choose **Download Pro**.
+
+Pro Intelligence is not part of the normal installation and downloads nothing in the background.
+On Apple silicon it uses an MLX-optimized Qwen3-VL 4B model and Whisper large-v3 turbo. Other
+supported systems use a smaller portable Qwen model and a local faster-whisper runtime. The bundle
+is stored inside OhIc's data directory and never uploads a video, transcript, identity, frame, or
+question to a model service.
 
 Use YouTube features only for videos you own or are permitted to download and process.
 
@@ -77,6 +86,8 @@ Use YouTube features only for videos you own or are permitted to download and pr
 - FFmpeg, including FFprobe.
 - At least about 500 MB for application dependencies, plus roughly 67 MB for Real-ESRGAN or
   141 MB for the optional RealBasicVSR checkpoint.
+- If you enable Pro Intelligence, allow roughly 5.5 GB on Apple silicon or up to about 7.5 GB for
+  the portable runtime and models. More free memory improves video-chat response time.
 - Enough free disk space for the imported source, temporary processing data, streaming parts, and
   final result. Long or high-resolution videos can require several times the source file size.
 
@@ -217,6 +228,35 @@ rolling buffer. When processing finishes, OhIc joins the internal parts into one
 This design front-loads the main wait and reduces the chance of later pauses. It cannot make
 enhancement run in real time, so a demanding upscale can still reach a part boundary before the
 next part is ready.
+
+## Understand a video with Pro Intelligence
+
+Choose **Pro** in the top navigation. The first screen explains the local models and their disk
+size. Nothing is installed until you choose **Download Pro**; an interrupted download can be
+resumed.
+
+After setup:
+
+1. Open an imported video and choose **Pro**, then **Analyze this video**.
+2. OhIc creates word-timed captions with Whisper, detects and follows multiple people, and stores
+   visual anchors for local Qwen reasoning. The original video is never modified.
+3. Turn captions on in the player, search the transcript, or choose any timestamp to seek there.
+4. Open **Subjects** to see appearance windows. Give a person a name or link the track to a name
+   you assigned earlier. OhIc remembers that label in its local identity vault; it does not guess
+   real-world identity or run cloud face recognition.
+5. Open **Ask** and ask about speech, people, visible moments, or the current playhead. OhIc runs a
+   fixed set of read-only tools over metadata, transcript segments, tracked appearances, and local
+   keyframes before Qwen writes the answer. Answers include clickable evidence timestamps, and the
+   interface shows which local tools were used.
+
+Analyses, identity labels, and chats persist when you change sessions or restart OhIc. Open Pro
+without a selected source to see the persistent analysis library. **Release AI memory** unloads
+Qwen from working memory without removing its downloaded files or saved analysis.
+
+Automatic tracking is a navigation aid, not biometric identification or forensic evidence. It can
+miss distant, obscured, animated, or poorly lit people and may split one person into several
+tracks. Likewise, local model answers can be incomplete; use the timestamp citations to inspect
+the source yourself.
 
 ## Track, reopen, and stop work
 

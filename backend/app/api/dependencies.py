@@ -6,7 +6,9 @@ from app.jobs.manager import JobManager
 from app.models.database import Database
 from app.services.batches import BatchManager
 from app.services.comparisons import ComparisonManager
+from app.services.intelligence import IntelligenceManager
 from app.services.playlists import PlaylistManager
+from app.services.pro import ProSetupService
 from app.services.storage import StorageService
 from app.services.videos import VideoService
 from app.services.youtube import YouTubeService
@@ -60,6 +62,16 @@ def get_batch_manager() -> BatchManager:
 @lru_cache
 def get_comparison_manager() -> ComparisonManager:
     return ComparisonManager(get_database(), get_job_manager())
+
+
+@lru_cache
+def get_pro_setup_service() -> ProSetupService:
+    return ProSetupService(get_settings(), get_database())
+
+
+@lru_cache
+def get_intelligence_manager() -> IntelligenceManager:
+    return IntelligenceManager(get_settings(), get_database(), get_pro_setup_service())
 
 
 @lru_cache

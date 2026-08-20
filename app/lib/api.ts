@@ -15,6 +15,10 @@ import type {
   YouTubeDownloadRecord,
   YouTubeMetadata,
   YouTubeReliabilityReport,
+  ChatSession,
+  IdentityRecord,
+  ProStatus,
+  VideoAnalysis,
 } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -169,6 +173,42 @@ export const api = {
     request<JobRecord>(`/api/jobs/${id}/pause`, { method: "POST" }),
   resumeJob: (id: string) =>
     request<JobRecord>(`/api/jobs/${id}/resume`, { method: "POST" }),
+  proStatus: () => request<ProStatus>("/api/pro/status"),
+  installPro: () => request<ProStatus>("/api/pro/install", { method: "POST" }),
+  unloadPro: async () => {
+    const response = await fetch(`${API_URL}/api/pro/unload`, { method: "POST" });
+    if (!response.ok) throw new Error("The local Qwen model could not be unloaded.");
+  },
+  analyses: () => request<VideoAnalysis[]>("/api/pro/analyses"),
+  videoAnalysis: (videoId: string) =>
+    request<VideoAnalysis | null>(`/api/pro/videos/${videoId}/analysis`),
+  analysis: (id: string) => request<VideoAnalysis>(`/api/pro/analyses/${id}`),
+  createAnalysis: (videoId: string) =>
+    request<VideoAnalysis>("/api/pro/analyses", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ video_id: videoId, transcribe: true, track_people: true }),
+    }),
+  cancelAnalysis: (id: string) =>
+    request<VideoAnalysis>(`/api/pro/analyses/${id}/cancel`, { method: "POST" }),
+  identities: () => request<IdentityRecord[]>("/api/pro/identities"),
+  tagSubject: (analysisId: string, subjectId: string, input: { identity_id?: string; name?: string }) =>
+    request<VideoAnalysis>(`/api/pro/analyses/${analysisId}/subjects/${subjectId}/identity`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }),
+  chatHistory: (analysisId: string) =>
+    request<ChatSession | null>(`/api/pro/analyses/${analysisId}/chat`),
+  askVideo: (analysisId: string, input: { question: string; session_id?: string; current_time?: number }) =>
+    request<{ session: ChatSession; message: ChatSession["messages"][number] }>(
+      `/api/pro/analyses/${analysisId}/chat`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      },
+    ),
 };
 
 export function mediaUrl(path?: string): string {

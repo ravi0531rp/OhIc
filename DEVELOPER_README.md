@@ -18,6 +18,7 @@ and extending OhIc. For product features and user instructions, start with the
 - [Processing pipeline](#processing-pipeline)
 - [YouTube and playlist implementation](#youtube-and-playlist-implementation)
 - [Watch-while-enhancing implementation](#watch-while-enhancing-implementation)
+- [Optional Pro Intelligence](#optional-pro-intelligence)
 - [Concurrency, cancellation, and restart behavior](#concurrency-cancellation-and-restart-behavior)
 - [Security and privacy boundaries](#security-and-privacy-boundaries)
 - [Testing and quality checks](#testing-and-quality-checks)
@@ -34,7 +35,7 @@ OhIc has two local processes:
 | Layer | Implementation | Default address | Responsibility |
 | --- | --- | --- | --- |
 | Browser workspace | React 19, TypeScript, vinext, Vite | `http://localhost:3000` | Import, settings, progress, history, playlists, storage, playback, comparison |
-| Local engine | Python 3.11/3.12, FastAPI, Pydantic, Uvicorn | `http://127.0.0.1:8000` | Validation, FFprobe, yt-dlp, SQLite, job orchestration, AI inference, FFmpeg, media delivery |
+| Local engine | Python 3.11/3.12, FastAPI, Pydantic, Uvicorn | `http://127.0.0.1:8000` | Validation, FFprobe, yt-dlp, SQLite, job orchestration, AI inference, optional video intelligence, FFmpeg, media delivery |
 
 The production enhancement model is the official Real-ESRGAN ×2 RRDBNet checkpoint, loaded
 directly through PyTorch. Hardware selection is automatic in this order:
@@ -339,6 +340,8 @@ Copy `.env.example` to `.env`. Every application setting is listed below.
 | `OHIC_DEFAULT_MODEL` | model ID | `realesrgan-x2plus` | Reserved pipeline default. Current UI/API requests explicitly default `model_id` to `realesrgan-x2plus`; changing only this variable does not change submitted jobs yet. |
 | `OHIC_DEFAULT_CODEC` | codec ID | `h264` | Reserved codec default. The current encoder is explicitly `libx264` with MP4 output; changing only this variable has no effect yet. |
 | `OHIC_ENABLE_REALBASICVSR` | boolean | `true` | Registers the experimental `realbasicvsr-x4-experimental` engine in `/api/models` and the UI. Set `false` and restart to expose only Real-ESRGAN. This does not delete cached weights or prior job records. |
+| `OHIC_PRO_QWEN_MODEL` | Hugging Face repository ID or unset | platform default | Overrides the Pro video-language checkpoint downloaded after explicit setup. Apple silicon defaults to `mlx-community/Qwen3-VL-4B-Instruct-4bit`; the portable profile defaults to `Qwen/Qwen3-VL-2B-Instruct`. The replacement must be compatible with the selected MLX or Transformers runtime. |
+| `OHIC_PRO_WHISPER_MODEL` | Hugging Face repository ID or unset | platform default | Overrides the Pro transcription checkpoint. Apple silicon defaults to `mlx-community/whisper-large-v3-turbo`; the portable profile defaults to `Systran/faster-whisper-large-v3-turbo`. |
 | `OHIC_LOG_LEVEL` | log level | `INFO` | Python/structlog filtering. Typical values are `DEBUG`, `INFO`, `WARNING`, `ERROR`, and `CRITICAL`. Unknown values fall back to `INFO`. Logs are JSON after application startup. |
 
 The settings model ignores unknown environment fields. Directories are created during settings
@@ -359,6 +362,7 @@ These are opt-in and are not normal runtime configuration:
 | --- | --- | --- |
 | `OHIC_RUN_NETWORK_TESTS` | `1` | Enables the small live YouTube ingestion test. It uses the public network and can fail when YouTube behavior changes. |
 | `OHIC_RUN_LARGE_YOUTUBE_TESTS` | `1` | Enables the larger live regression test for YouTube format fallback. It downloads substantially more data. |
+| `OHIC_PRO_TEST_MODE` | `1` | Replaces model downloads/inference/tracking with deterministic fixtures. Never use with a real user data directory; it is intended only for isolated tests. |
 
 ### Configuration precedence and caching
 
@@ -499,7 +503,7 @@ data/
 └── ohic.sqlite3                 # records and paths, not video blobs
 ```
 
-SQLite uses WAL mode and six typed-JSON tables:
+SQLite uses WAL mode and ten typed-JSON tables:
 
 | Table | Columns outside JSON | JSON payload |
 | --- | --- | --- |
@@ -509,6 +513,10 @@ SQLite uses WAL mode and six typed-JSON tables:
 | `batches` | `id`, `created_at`, `updated_at` | Persistent local multi-file queue and child job references |
 | `presets` | `id`, `created_at` | Named target, engine, quality, container, scan, resource, and scene settings |
 | `comparisons` | `id`, `created_at`, `updated_at` | Preview Lab variants, child jobs, progress, and output URLs |
+| `pro_state` | singleton `id`, `updated_at` | Consent-gated installation state, model selection, progress, and recoverable errors |
+| `analyses` | `id`, `video_id`, `status`, timestamps | Transcript, tracked subjects and boxes, keyframe URLs, progress, and errors |
+| `identities` | `id`, timestamps | User-assigned name, notes, color, and reference thumbnail URL |
+| `chat_sessions` | `id`, `analysis_id`, timestamps | User/assistant messages, validated evidence citations, and tool execution audit |
 
 The Pydantic response model excludes source `path` and job `output_path`, but persistence explicitly
 adds them to stored JSON. API media routes resolve the stored record and verify the requested file
@@ -569,6 +577,16 @@ Interactive schemas are always available at `/docs`. All application routes are 
 | `GET`,`POST` | `/api/comparisons`, `/api/comparisons` | List/create Preview Lab sessions | 200/202 |
 | `GET` | `/api/comparisons/{id}` | Refresh one comparison session | 200 |
 | `POST` | `/api/comparisons/{id}/cancel` | Stop comparison child jobs | 200 |
+| `GET`,`POST` | `/api/pro/status`, `/api/pro/install` | Inspect/start explicit optional model setup | 200/202 |
+| `POST` | `/api/pro/unload` | Release the resident Qwen model from working memory | 204 |
+| `GET`,`POST` | `/api/pro/analyses`, `/api/pro/analyses` | List/start persisted video analyses | 200/202 |
+| `GET` | `/api/pro/videos/{video_id}/analysis` | Latest analysis for one imported video | 200 |
+| `GET`,`POST` | `/api/pro/analyses/{id}`, `/api/pro/analyses/{id}/cancel` | Read/cancel one analysis | 200 |
+| `GET` | `/api/pro/analyses/{id}/events` | Analysis progress SSE stream | 200 |
+| `GET` | `/api/pro/analyses/{id}/{subtitles.vtt,frames/{index}}` | Generated caption/keyframe media | 200 |
+| `POST` | `/api/pro/analyses/{id}/subjects/{subject_id}/identity` | Link or create a user-assigned identity | 200 |
+| `GET`,`POST` | `/api/pro/identities`, `/api/pro/identities` | List/create the local identity vault | 200/201 |
+| `GET`,`POST` | `/api/pro/analyses/{id}/chat` | Restore or continue evidence-grounded chat | 200 |
 
 SSE endpoints emit named `progress` events containing the full current JSON record and send
 comment keep-alives. Job/playlist intervals are 0.5 seconds; download intervals are 0.35 seconds.
@@ -813,15 +831,63 @@ Stream state—including each index, timestamps, state, progress, URL, ready cou
 seconds—is stored inside the job JSON, so the viewer can be reopened. The chunk files remain after
 final concat until storage cleanup deletes the job output.
 
+## Optional Pro Intelligence
+
+Pro is intentionally absent from `uv sync --no-dev`. `ProSetupService.start_install()` is called
+only by the explicit `/api/pro/install` action. It uses `uv pip install --python <current-python>`
+inside OhIc's existing isolated environment, then uses `huggingface_hub.snapshot_download()` with
+restartable local directories under `data/intelligence/models/`. Setup progress and failure text
+are persisted in `pro_state`, so the normal app remains usable while setup runs.
+
+Platform profiles are:
+
+| Host | Video-language runtime | Default Qwen checkpoint | Transcription runtime | Default Whisper checkpoint |
+| --- | --- | --- | --- | --- |
+| Apple silicon | `mlx-vlm` | `mlx-community/Qwen3-VL-4B-Instruct-4bit` | `mlx-whisper` | `mlx-community/whisper-large-v3-turbo` |
+| Other supported hosts | Transformers/PyTorch | `Qwen/Qwen3-VL-2B-Instruct` | `faster-whisper` | `Systran/faster-whisper-large-v3-turbo` |
+
+Both profiles add `opencv-python-headless` for tracking and `huggingface-hub` for resumable model
+materialization. Override repository IDs only with compatible model layouts. A persisted `ready`
+state is accepted only when the required Python modules and local Qwen configuration are present.
+
+`IntelligenceManager` serializes analyses on `ohic-intelligence` and persists each stage:
+
+1. Whisper transcribes with word timestamps. `condition_on_previous_text=false` reduces cascading
+   hallucinations; the MLX adapter also removes high `no_speech_prob` segments. A WebVTT file is
+   written beside the analysis.
+2. OpenCV's local person detector samples at most roughly 300 frames and associates boxes by IoU
+   and recent time. Tracks with fewer than two observations are discarded. Normalized boxes,
+   confidence, time windows, colors, and local thumbnails are persisted. This is person tracking,
+   not face recognition or automatic real-world identity inference.
+3. FFmpeg extracts 3–18 uniformly distributed, 960-pixel-wide visual anchors. Analysis media
+   routes validate persisted IDs and indexes before returning these local files.
+4. Identity tagging either links a track to an existing `IdentityRecord` or creates a new
+   user-assigned identity. Names remain available across videos and sessions.
+
+Chat is an orchestrated read-only tool pipeline, not an unrestricted agent. Every question calls
+the applicable subset of `video_metadata`, `search_transcript`, `list_subjects`, and
+`inspect_frames`. Inputs are bounded, outputs become a compact evidence prompt, and at most four
+local keyframes are attached to Qwen. The final response receives citations derived from tool
+results rather than model-authored URLs. Each assistant message persists both citations and the
+tool execution audit. Qwen is loaded lazily under a mutex; `/api/pro/unload` drops the resident
+model and clears the MLX cache without deleting checkpoints or analysis records.
+
+If the process closes mid-analysis, startup recovery marks the record failed with a safe retry
+message; completed transcripts and frames remain in the analysis directory. Cancellation uses a
+per-analysis event checked between stages and during frame sampling. `OHIC_PRO_TEST_MODE=1` swaps
+downloads and inference for deterministic fixtures and must always use a disposable data path.
+
 ## Concurrency, cancellation, and restart behavior
 
-There are three primary one-worker executors plus persisted orchestration records:
+There are five primary one-worker executors plus persisted orchestration records:
 
 | Executor | Scope | Persistence |
 | --- | --- | --- |
 | `ohic-enhance` | Preview, full, stream, local-batch, comparison, and playlist child jobs | Job/checkpoint/stream state persists; futures/runtimes are recreated by explicit resume |
 | `ohic-youtube` | Standalone YouTube downloads | In-memory download records only; completed video records persist |
 | `ohic-playlist` | Playlist orchestration | Playlist/item records persist; executor work does not resume |
+| `ohic-pro-setup` | Explicit optional dependency and model download | Setup progress/error persists and partial Hugging Face downloads resume |
+| `ohic-intelligence` | Transcription, tracking, and evidence indexing | Analysis records persist; interrupted work becomes safely retryable |
 
 These executors can run at the same time. A playlist download can overlap a standalone download,
 and non-enhancement work can overlap enhancement. Only enhancement inference itself is globally
@@ -852,8 +918,8 @@ checkpoint bookkeeping. Cancel remains terminal and Storage can remove checkpoin
 - Uploads are streamed with a configurable size limit rather than buffered as one request body.
 - Video bytes are not stored in SQLite and are not sent to a cloud processor.
 - Thumbnail URLs are displayed from YouTube, so the browser may request those remote images.
-- The official model checkpoint and YouTube metadata/media are the expected outbound network
-  dependencies.
+- Enhancement checkpoints, explicitly requested Pro dependencies/models, and YouTube
+  metadata/media are the expected outbound network dependencies.
 
 ## Testing and quality checks
 
@@ -867,7 +933,9 @@ uv run pytest
 
 Coverage includes FFprobe parsing, recommendation thresholds, URL/path/filename safety, SQLite
 round trips, registry behavior, job cancellation, playlist lifecycle, storage cascades, stream
-planning, YouTube fallback/progress/cancellation, and a synthetic CPU pipeline with AAC audio.
+planning, YouTube fallback/progress/cancellation, Pro's no-download-before-consent invariant,
+analysis persistence, identity memory, grounded tool audits, and a synthetic CPU pipeline with AAC
+audio.
 
 Run one file or test:
 
@@ -1173,6 +1241,12 @@ and test existing databases before introducing required fields or enum values.
 - Stream parts are independent MP4s rather than a standards-based HLS/DASH manifest.
 - Final stream concat requires compatible independently encoded parts.
 - One-worker queues favor memory safety over throughput.
+- Pro's OpenCV tracker can miss or split difficult person tracks and does not yet expose manual
+  box/SAM2 correction. User-assigned identity labels are remembered, but biometric matching is
+  intentionally not implemented.
+- Pro analysis retries from the beginning after interruption; completed intermediate files remain
+  reusable on disk but stage-level resume is not implemented yet.
+- The portable Qwen/Whisper profile is substantially slower than Apple MLX or CUDA acceleration.
 - The API has no authentication and must remain loopback-only unless secured externally.
 
 ## Supporting documents and licenses
@@ -1181,6 +1255,7 @@ and test existing databases before introducing required fields or enum values.
 - [Architecture notes](docs/architecture.md)
 - [Model evaluation](docs/model-evaluation.md)
 - [RealBasicVSR experiment](docs/realbasicvsr-experiment.md)
+- [Local video intelligence design](docs/local-video-intelligence.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)
 - [MIT license](LICENSE)
 

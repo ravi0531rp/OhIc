@@ -10,6 +10,7 @@ from app.api.dependencies import (
     get_batch_manager,
     get_comparison_manager,
     get_database,
+    get_intelligence_manager,
     get_job_manager,
     get_playlist_manager,
 )
@@ -43,6 +44,7 @@ async def lifespan(app: FastAPI):
     get_playlist_manager()
     get_batch_manager()
     get_comparison_manager()
+    get_intelligence_manager().recover_interrupted()
     clean_stale_temp(settings.data_dir / "temp", settings.stale_temp_hours)
     yield
 

@@ -8,8 +8,10 @@ from app.api.dependencies import (
     get_batch_manager,
     get_comparison_manager,
     get_database,
+    get_intelligence_manager,
     get_job_manager,
     get_playlist_manager,
+    get_pro_setup_service,
     get_registry,
     get_storage_service,
     get_video_service,
@@ -20,6 +22,18 @@ from app.core.device import detect_hardware
 from app.core.resources import resource_snapshot
 from app.schemas.batch import BatchCreateRequest, BatchRecord, PresetCreate, PresetRecord
 from app.schemas.comparison import ComparisonCreate, ComparisonRecord
+from app.schemas.intelligence import (
+    AnalysisCreateRequest,
+    AnalysisStatus,
+    ChatRequest,
+    ChatResponse,
+    ChatSession,
+    IdentityCreateRequest,
+    IdentityRecord,
+    ProStatus,
+    SubjectIdentityRequest,
+    VideoAnalysis,
+)
 from app.schemas.job import JobCreate, JobRecord, JobStatus
 from app.schemas.playlist import (
     PlaylistCreateRequest,
@@ -46,6 +60,154 @@ from app.utils.files import ensure_within
 from app.video.probe import VideoProbeError
 
 router = APIRouter(prefix="/api")
+
+
+@router.get("/pro/status", response_model=ProStatus)
+def pro_status() -> ProStatus:
+    return get_pro_setup_service().status()
+
+
+@router.post("/pro/install", response_model=ProStatus, status_code=202)
+def install_pro() -> ProStatus:
+    return get_pro_setup_service().start_install()
+
+
+@router.post("/pro/unload", status_code=204)
+def unload_pro_model() -> None:
+    get_intelligence_manager().unload_chat_model()
+
+
+@router.post("/pro/analyses", response_model=VideoAnalysis, status_code=202)
+def create_analysis(request: AnalysisCreateRequest) -> VideoAnalysis:
+    try:
+        return get_intelligence_manager().create(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/pro/analyses", response_model=list[VideoAnalysis])
+def list_analyses(limit: int = 50) -> list[VideoAnalysis]:
+    return get_intelligence_manager().list(min(max(limit, 1), 100))
+
+
+@router.get("/pro/videos/{video_id}/analysis", response_model=VideoAnalysis | None)
+def video_analysis(video_id: str) -> VideoAnalysis | None:
+    if not get_database().get_video(video_id):
+        raise HTTPException(status_code=404, detail="Video not found.")
+    return get_intelligence_manager().for_video(video_id)
+
+
+@router.get("/pro/analyses/{analysis_id}", response_model=VideoAnalysis)
+def get_analysis(analysis_id: str) -> VideoAnalysis:
+    analysis = get_intelligence_manager().get(analysis_id)
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found.")
+    return analysis
+
+
+@router.post("/pro/analyses/{analysis_id}/cancel", response_model=VideoAnalysis)
+def cancel_analysis(analysis_id: str) -> VideoAnalysis:
+    try:
+        return get_intelligence_manager().cancel(analysis_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/pro/analyses/{analysis_id}/events")
+async def analysis_events(analysis_id: str) -> StreamingResponse:
+    if not get_intelligence_manager().get(analysis_id):
+        raise HTTPException(status_code=404, detail="Analysis not found.")
+
+    async def stream():
+        previous = ""
+        while True:
+            analysis = get_intelligence_manager().get(analysis_id)
+            if not analysis:
+                return
+            payload = analysis.model_dump_json()
+            if payload != previous:
+                yield f"event: progress\ndata: {payload}\n\n"
+                previous = payload
+            if analysis.status in {
+                AnalysisStatus.READY,
+                AnalysisStatus.FAILED,
+                AnalysisStatus.CANCELLED,
+            }:
+                return
+            yield ": keep-alive\n\n"
+            await asyncio.sleep(0.6)
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+@router.get("/pro/analyses/{analysis_id}/subtitles.vtt")
+def analysis_subtitles(analysis_id: str) -> FileResponse:
+    if not get_intelligence_manager().get(analysis_id):
+        raise HTTPException(status_code=404, detail="Analysis not found.")
+    path = get_intelligence_manager().subtitle_path(analysis_id)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Subtitles are not ready.")
+    return FileResponse(path, media_type="text/vtt", filename="OhIc-subtitles.vtt")
+
+
+@router.get("/pro/analyses/{analysis_id}/frames/{index}")
+def analysis_frame(analysis_id: str, index: int) -> FileResponse:
+    analysis = get_intelligence_manager().get(analysis_id)
+    if not analysis or index < 0 or index >= len(analysis.keyframes):
+        raise HTTPException(status_code=404, detail="Keyframe not found.")
+    path = get_intelligence_manager().frame_path_by_index(analysis_id, index)
+    if not path.exists():
+        raise HTTPException(status_code=410, detail="Keyframe was removed.")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@router.get("/pro/analyses/{analysis_id}/subjects/{subject_id}/thumbnail")
+def subject_thumbnail(analysis_id: str, subject_id: str) -> FileResponse:
+    analysis = get_intelligence_manager().get(analysis_id)
+    if not analysis or not any(subject.id == subject_id for subject in analysis.subjects):
+        raise HTTPException(status_code=404, detail="Subject not found.")
+    path = get_intelligence_manager().subject_thumbnail_path(analysis_id, subject_id)
+    if not path.exists():
+        raise HTTPException(status_code=410, detail="Subject thumbnail was removed.")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@router.post(
+    "/pro/analyses/{analysis_id}/subjects/{subject_id}/identity",
+    response_model=VideoAnalysis,
+)
+def tag_subject(
+    analysis_id: str, subject_id: str, request: SubjectIdentityRequest
+) -> VideoAnalysis:
+    try:
+        return get_intelligence_manager().tag_subject(analysis_id, subject_id, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/pro/identities", response_model=list[IdentityRecord])
+def list_identities() -> list[IdentityRecord]:
+    return get_database().list_identities()
+
+
+@router.post("/pro/identities", response_model=IdentityRecord, status_code=201)
+def create_identity(request: IdentityCreateRequest) -> IdentityRecord:
+    return get_intelligence_manager().create_identity(request)
+
+
+@router.post("/pro/analyses/{analysis_id}/chat", response_model=ChatResponse)
+async def analysis_chat(analysis_id: str, request: ChatRequest) -> ChatResponse:
+    try:
+        return await asyncio.to_thread(get_intelligence_manager().chat, analysis_id, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/pro/analyses/{analysis_id}/chat", response_model=ChatSession | None)
+def analysis_chat_history(analysis_id: str) -> ChatSession | None:
+    if not get_intelligence_manager().get(analysis_id):
+        raise HTTPException(status_code=404, detail="Analysis not found.")
+    return get_database().latest_chat_for_analysis(analysis_id)
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -294,9 +456,7 @@ def youtube_download_status(download_id: str) -> YouTubeDownloadRecord:
     return record
 
 
-@router.post(
-    "/videos/youtube/downloads/{download_id}/cancel", response_model=YouTubeDownloadRecord
-)
+@router.post("/videos/youtube/downloads/{download_id}/cancel", response_model=YouTubeDownloadRecord)
 def cancel_youtube_download(download_id: str) -> YouTubeDownloadRecord:
     record = get_youtube_download_manager().cancel(download_id)
     if not record:
