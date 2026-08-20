@@ -1,4 +1,4 @@
-# OhIc
+# OhIc (Oh-I-See 😉)
 
 **Restore, upscale, compare, and stream enhanced video.**
 
