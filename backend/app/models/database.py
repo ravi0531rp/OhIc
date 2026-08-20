@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.schemas.batch import BatchRecord, PresetRecord
 from app.schemas.comparison import ComparisonRecord
+from app.schemas.intelligence import ChatSession, IdentityRecord, ProStatus, VideoAnalysis
 from app.schemas.job import JobRecord
 from app.schemas.playlist import PlaylistRecord
 from app.schemas.video import VideoRecord
@@ -56,6 +57,25 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS comparisons_updated
                   ON comparisons(updated_at DESC);
+                CREATE TABLE IF NOT EXISTS pro_state (
+                  id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS analyses (
+                  id TEXT PRIMARY KEY, video_id TEXT NOT NULL, status TEXT NOT NULL,
+                  payload TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS analyses_video ON analyses(video_id);
+                CREATE INDEX IF NOT EXISTS analyses_updated ON analyses(updated_at DESC);
+                CREATE TABLE IF NOT EXISTS identities (
+                  id TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS identities_updated ON identities(updated_at DESC);
+                CREATE TABLE IF NOT EXISTS chat_sessions (
+                  id TEXT PRIMARY KEY, analysis_id TEXT NOT NULL, payload TEXT NOT NULL,
+                  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS chat_analysis ON chat_sessions(analysis_id);
                 """
             )
             conn.execute("PRAGMA optimize")
@@ -166,9 +186,7 @@ class Database:
 
     def get_batch(self, batch_id: str) -> BatchRecord | None:
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT payload FROM batches WHERE id = ?", (batch_id,)
-            ).fetchone()
+            row = conn.execute("SELECT payload FROM batches WHERE id = ?", (batch_id,)).fetchone()
         return BatchRecord.model_validate_json(row["payload"]) if row else None
 
     def list_batches(self, limit: int = 50) -> list[BatchRecord]:
@@ -187,9 +205,7 @@ class Database:
 
     def get_preset(self, preset_id: str) -> PresetRecord | None:
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT payload FROM presets WHERE id = ?", (preset_id,)
-            ).fetchone()
+            row = conn.execute("SELECT payload FROM presets WHERE id = ?", (preset_id,)).fetchone()
         return PresetRecord.model_validate_json(row["payload"]) if row else None
 
     def list_presets(self) -> list[PresetRecord]:
@@ -226,3 +242,112 @@ class Database:
                 "SELECT payload FROM comparisons ORDER BY updated_at DESC LIMIT ?", (limit,)
             ).fetchall()
         return [ComparisonRecord.model_validate_json(row["payload"]) for row in rows]
+
+    def save_pro_status(self, status: ProStatus) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO pro_state VALUES ('pro', ?, ?)",
+                (status.model_dump_json(), datetime_now_iso()),
+            )
+
+    def get_pro_status(self) -> ProStatus | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT payload FROM pro_state WHERE id = 'pro'").fetchone()
+        return ProStatus.model_validate_json(row["payload"]) if row else None
+
+    def save_analysis(self, analysis: VideoAnalysis) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO analyses VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    analysis.id,
+                    analysis.video_id,
+                    analysis.status,
+                    analysis.model_dump_json(),
+                    analysis.created_at.isoformat(),
+                    analysis.updated_at.isoformat(),
+                ),
+            )
+
+    def get_analysis(self, analysis_id: str) -> VideoAnalysis | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM analyses WHERE id = ?", (analysis_id,)
+            ).fetchone()
+        return VideoAnalysis.model_validate_json(row["payload"]) if row else None
+
+    def analyses_for_video(self, video_id: str) -> list[VideoAnalysis]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM analyses WHERE video_id = ? ORDER BY updated_at DESC",
+                (video_id,),
+            ).fetchall()
+        return [VideoAnalysis.model_validate_json(row["payload"]) for row in rows]
+
+    def list_analyses(self, limit: int = 50) -> list[VideoAnalysis]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM analyses ORDER BY updated_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [VideoAnalysis.model_validate_json(row["payload"]) for row in rows]
+
+    def save_identity(self, identity: IdentityRecord) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO identities VALUES (?, ?, ?, ?)",
+                (
+                    identity.id,
+                    identity.model_dump_json(),
+                    identity.created_at.isoformat(),
+                    identity.updated_at.isoformat(),
+                ),
+            )
+
+    def get_identity(self, identity_id: str) -> IdentityRecord | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM identities WHERE id = ?", (identity_id,)
+            ).fetchone()
+        return IdentityRecord.model_validate_json(row["payload"]) if row else None
+
+    def list_identities(self) -> list[IdentityRecord]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM identities ORDER BY updated_at DESC"
+            ).fetchall()
+        return [IdentityRecord.model_validate_json(row["payload"]) for row in rows]
+
+    def save_chat_session(self, session: ChatSession) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO chat_sessions VALUES (?, ?, ?, ?, ?)",
+                (
+                    session.id,
+                    session.analysis_id,
+                    session.model_dump_json(),
+                    session.created_at.isoformat(),
+                    session.updated_at.isoformat(),
+                ),
+            )
+
+    def get_chat_session(self, session_id: str) -> ChatSession | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM chat_sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+        return ChatSession.model_validate_json(row["payload"]) if row else None
+
+    def latest_chat_for_analysis(self, analysis_id: str) -> ChatSession | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM chat_sessions WHERE analysis_id = ? "
+                "ORDER BY updated_at DESC LIMIT 1",
+                (analysis_id,),
+            ).fetchone()
+        return ChatSession.model_validate_json(row["payload"]) if row else None
+
+
+def datetime_now_iso() -> str:
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC).isoformat()

@@ -14,6 +14,7 @@ import type {
   ResolutionTarget,
   StorageItem,
   VideoRecord,
+  VideoAnalysis,
 } from "./lib/types";
 import { ComparisonViewer } from "./components/ComparisonViewer";
 import { AsyncEnhancementViewer } from "./components/AsyncEnhancementViewer";
@@ -27,6 +28,7 @@ import { StorageDrawer } from "./components/StorageDrawer";
 import { PlaylistDrawer } from "./components/PlaylistDrawer";
 import { BatchDrawer } from "./components/BatchDrawer";
 import { MultiPreviewViewer } from "./components/MultiPreviewViewer";
+import { ProIntelligenceWorkspace } from "./components/ProIntelligenceWorkspace";
 
 const FALLBACK_MODELS: EnhancementModel[] = [{
   identifier: "realesrgan-x2plus",
@@ -41,6 +43,8 @@ const FALLBACK_MODELS: EnhancementModel[] = [{
   temporal: false,
   supports_stream: true,
 }];
+
+type SourceDestination = "enhancement" | "pro";
 
 export function OhIcApp() {
   const [health, setHealth] = useState<Health | null>(null);
@@ -60,6 +64,8 @@ export function OhIcApp() {
   const [previewLab, setPreviewLab] = useState<ComparisonRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [proOpen, setProOpen] = useState(false);
+  const [sourceDestination, setSourceDestination] = useState<SourceDestination>("enhancement");
 
   const refreshHistory = useCallback(async () => {
     try { setHistory(await api.history()); } catch { /* backend state is shown separately */ }
@@ -366,6 +372,34 @@ export function OhIcApp() {
     setComparison(null);
     setBusy(false);
     setPreviewLab(null);
+    setSourceDestination("enhancement");
+  };
+
+  const chooseProSource = () => {
+    reset();
+    setSourceDestination("pro");
+    setProOpen(false);
+  };
+
+  const sourceLoaded = (source: VideoRecord) => {
+    setVideo(source);
+    setError(null);
+    if (sourceDestination === "pro") {
+      setProOpen(true);
+      setSourceDestination("enhancement");
+    }
+  };
+
+  const openProAnalysis = async (analysis: VideoAnalysis) => {
+    try {
+      setVideo(await api.video(analysis.video_id));
+      setJob(null);
+      setComparison(null);
+      setPreviewLab(null);
+      setProOpen(true);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "This analyzed video is unavailable.");
+    }
   };
 
   if (job?.kind === "stream" && video) {
@@ -411,6 +445,7 @@ export function OhIcApp() {
         <button className="brand" onClick={reset} aria-label="OhIc home"><span className="brand-mark">O</span><span>OhIc</span></button>
         <div className="top-actions">
           {health && <span className={`hardware-pill ${health.status}`}><i /> {health.status === "ok" ? "Engine ready" : "Setup required"}</span>}
+          <button className={proOpen ? "nav-pro active" : "nav-pro"} onClick={() => { setProOpen(true); setPlaylistsOpen(false); setStorageOpen(false); setHistoryOpen(false); }}><SparkIcon size={16} /> Pro <span>Optional</span></button>
           <button onClick={() => { setPlaylistsOpen(true); setStorageOpen(false); setHistoryOpen(false); void refreshPlaylists(); }}><PlaylistIcon size={17} /> Playlists{hasActivePlaylist && <i className="nav-live" />}</button>
           <button onClick={() => { setBatchesOpen(true); setPlaylistsOpen(false); setStorageOpen(false); setHistoryOpen(false); void refreshBatches(); }}><PlaylistIcon size={17} /> Batch queue{hasActiveBatch && <i className="nav-live" />}</button>
           <button onClick={() => { setStorageOpen(true); setPlaylistsOpen(false); setHistoryOpen(false); void refreshStorage(); }}><HardDriveIcon size={17} /> Storage</button>
@@ -418,7 +453,16 @@ export function OhIcApp() {
         </div>
       </nav>
 
-      {!video ? (
+      {proOpen ? (
+        <ProIntelligenceWorkspace
+          key={video?.id ?? "pro-library"}
+          video={video}
+          onClose={() => setProOpen(false)}
+          onChooseSource={chooseProSource}
+          onSelectAnalysis={(analysis) => void openProAnalysis(analysis)}
+          onError={setError}
+        />
+      ) : !video ? (
         <main className="landing">
           <div className="ambient ambient-one" />
           <div className="ambient ambient-two" />
@@ -427,7 +471,7 @@ export function OhIcApp() {
             <h1>Make old video<br /><em>look new again.</em></h1>
             <p>Upscale individual videos, selected ranges, or entire playlists—and watch results as they are produced.</p>
           </section>
-          <SourcePicker onLoaded={(source) => { setVideo(source); setError(null); }} onPlaylistStarted={(started) => { setPlaylists((current) => [started, ...current.filter((item) => item.id !== started.id)]); setPlaylistsOpen(true); setError(null); }} onBatchStarted={(started) => { setBatches((current) => [started, ...current.filter((item) => item.id !== started.id)]); setBatchesOpen(true); setError(null); }} onError={setError} />
+          <SourcePicker onLoaded={sourceLoaded} onPlaylistStarted={(started) => { setPlaylists((current) => [started, ...current.filter((item) => item.id !== started.id)]); setPlaylistsOpen(true); setError(null); }} onBatchStarted={(started) => { setBatches((current) => [started, ...current.filter((item) => item.id !== started.id)]); setBatchesOpen(true); setError(null); }} onError={setError} />
           <div className="trust-row">
             <span>Real-ESRGAN ×2</span>
             <span>On-device processing</span>

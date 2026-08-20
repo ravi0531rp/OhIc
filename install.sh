@@ -318,12 +318,15 @@ fi
 if [[ -z "$SETUP_STAMP" || ! -f "$SETUP_STAMP" ]]; then
   say "Preparing OhIc"
   uv python install 3.12
-  (cd "$SOURCE_DIR/backend" && uv sync --frozen --no-dev --python 3.12)
+  # Pro installs its optional ML runtime into this same isolated environment.
+  # Keep those packages on later launcher runs instead of pruning them as
+  # dependencies that are not part of the lightweight base installation.
+  (cd "$SOURCE_DIR/backend" && uv sync --frozen --no-dev --inexact --python 3.12)
   (cd "$SOURCE_DIR" && npm ci --no-audit --no-fund)
   (cd "$SOURCE_DIR" && NEXT_PUBLIC_API_URL="$BACKEND_URL" npm run build)
 
   say "Verifying the installation"
-  (cd "$SOURCE_DIR/backend" && uv run --no-dev python -c \
+  (cd "$SOURCE_DIR/backend" && uv run --no-sync python -c \
     'import app.main; print("      Backend imports successfully")')
   note "Frontend production build is ready"
   if [[ -n "$SETUP_STAMP" ]]; then
@@ -360,7 +363,7 @@ else
   fi
 
   say "Starting OhIc"
-  (cd "$SOURCE_DIR/backend" && uv run --no-dev uvicorn app.main:app --host 127.0.0.1 --port 8000) &
+  (cd "$SOURCE_DIR/backend" && uv run --no-sync uvicorn app.main:app --host 127.0.0.1 --port 8000) &
   BACKEND_PID=$!
   (cd "$SOURCE_DIR" && npm run start -- -H 127.0.0.1 -p 3000) &
   FRONTEND_PID=$!
