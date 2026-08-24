@@ -26,6 +26,7 @@ class ProSetupService:
     HINGLISH_MODEL = "Trelis/tara"
     TRANSCRIPT_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     VISUAL_EMBEDDING_MODEL = "sentence-transformers/clip-ViT-B-32"
+    PERSON_REID_MODEL = "anriha/osnet_x0_25_msmt17"
 
     def __init__(self, settings: Settings, database: Database):
         self.settings = settings
@@ -83,6 +84,10 @@ class ProSetupService:
     @property
     def visual_embedding_path(self) -> Path:
         return self.models_dir / "visual-embeddings"
+
+    @property
+    def person_reid_path(self) -> Path:
+        return self.models_dir / "person-reid"
 
     def status(self) -> ProStatus:
         status = self.database.get_pro_status() or self._new_status()
@@ -160,6 +165,7 @@ class ProSetupService:
             and (self.transcript_embedding_path / "modules.json").exists()
             and (self.visual_embedding_path / "modules.json").exists()
             and (self.visual_embedding_path / "0_CLIPModel" / "config.json").exists()
+            and (self.person_reid_path / "osnet_x0_25_msmt17.onnx").exists()
             and (self.models_dir / "rfdetr" / "rf-detr-small.pth").exists()
         )
 
@@ -302,8 +308,14 @@ class ProSetupService:
         self._download_snapshot(
             self.VISUAL_EMBEDDING_MODEL,
             self.visual_embedding_path,
-            91,
+            90,
             "Downloading visual retrieval",
+        )
+        self._download_snapshot(
+            self.PERSON_REID_MODEL,
+            self.person_reid_path,
+            92,
+            "Downloading person re-identification",
         )
         self._download_detection_model()
         self._update(

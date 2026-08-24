@@ -569,6 +569,7 @@ class IntelligenceManager:
             raise RuntimeError("RF-DETR weights are missing; repair Pro setup")
         model = RFDETRSmall(pretrain_weights=str(weights))
         tracker = sv.ByteTrack(frame_rate=max(1, round(min(10, max(video.metadata.fps, 1)))))
+        person_reid = self._load_person_reid() if include_people else None
         capture = cv2.VideoCapture(str(video.path))
         fps = capture.get(cv2.CAP_PROP_FPS) or max(video.metadata.fps, 1)
         duration = max(video.metadata.duration, 0.1)
@@ -581,7 +582,8 @@ class IntelligenceManager:
         )
         sample_seconds = max(0.25, duration / 900)
         step = max(1, round(sample_seconds * fps))
-        tracks: dict[tuple[int, int], dict] = {}
+        person_tracks: list[dict] = []
+        object_tracks: dict[tuple[int, int], dict] = {}
         frame_index = 0
         sample_index = 0
         analysis_dir = self._analysis_dir(analysis.id)
@@ -595,7 +597,8 @@ class IntelligenceManager:
                     break
                 timestamp = min(duration, frame_index / fps)
                 detections = model.predict(frame, threshold=0.3)
-                detections = tracker.update_with_detections(detections)
+                person_detections = []
+                person_boxes = []
                 for index, xyxy in enumerate(detections.xyxy):
                     class_id = int(detections.class_id[index])
                     try:
@@ -603,12 +606,8 @@ class IntelligenceManager:
                     except (IndexError, KeyError, TypeError):
                         label = f"Object {class_id}"
                     is_person = label.lower() == "person"
-                    if (is_person and not include_people) or (
-                        not is_person and not include_objects
-                    ):
+                    if not is_person or not include_people:
                         continue
-                    tracker_id = int(detections.tracker_id[index])
-                    key = (class_id, tracker_id)
                     x1, y1, x2, y2 = (float(value) for value in xyxy)
                     width = max(1.0, capture.get(cv2.CAP_PROP_FRAME_WIDTH))
                     height = max(1.0, capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -617,12 +616,58 @@ class IntelligenceManager:
                         if detections.confidence is not None
                         else 0.5
                     )
-                    if key not in tracks:
+                    person_boxes.append((x1, y1, x2, y2))
+                    person_detections.append(
+                        {
+                            "box": (
+                                max(0, min(1, x1 / width)),
+                                max(0, min(1, y1 / height)),
+                                max(0.0001, min(1, (x2 - x1) / width)),
+                                max(0.0001, min(1, (y2 - y1) / height)),
+                            ),
+                            "confidence": max(0, min(1, confidence)),
+                        }
+                    )
+                person_detections, person_boxes = self._deduplicate_person_detections(
+                    person_detections, person_boxes
+                )
+                if person_detections and person_reid is not None:
+                    embeddings = self._person_reid_embeddings(frame, person_boxes, person_reid)
+                    self._associate_people(
+                        person_tracks,
+                        person_detections,
+                        embeddings,
+                        timestamp,
+                        sample_seconds,
+                        frame,
+                        analysis_dir,
+                    )
+
+                tracked_detections = tracker.update_with_detections(detections)
+                for index, xyxy in enumerate(tracked_detections.xyxy):
+                    class_id = int(tracked_detections.class_id[index])
+                    try:
+                        label = str(COCO_CLASSES[class_id])
+                    except (IndexError, KeyError, TypeError):
+                        label = f"Object {class_id}"
+                    if label.lower() == "person" or not include_objects:
+                        continue
+                    tracker_id = int(tracked_detections.tracker_id[index])
+                    key = (class_id, tracker_id)
+                    x1, y1, x2, y2 = (float(value) for value in xyxy)
+                    width = max(1.0, capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    height = max(1.0, capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    confidence = (
+                        float(tracked_detections.confidence[index])
+                        if tracked_detections.confidence is not None
+                        else 0.5
+                    )
+                    if key not in object_tracks:
                         subject_id = uuid4().hex
-                        tracks[key] = {
+                        object_tracks[key] = {
                             "id": subject_id,
                             "label": label,
-                            "kind": "person" if is_person else "object",
+                            "kind": "object",
                             "appearances": [],
                         }
                         self._write_subject_thumbnail(
@@ -635,7 +680,7 @@ class IntelligenceManager:
                             ),
                             analysis_dir / "subjects" / f"{subject_id}.jpg",
                         )
-                    tracks[key]["appearances"].append(
+                    object_tracks[key]["appearances"].append(
                         SubjectAppearance(
                             start=timestamp,
                             end=min(duration, timestamp + sample_seconds),
@@ -654,14 +699,15 @@ class IntelligenceManager:
                     current = self.database.get_analysis(analysis.id)
                     if current:
                         current.progress = 45 + scanned * 35
-                        current.stage = f"RF-DETR + ByteTrack · {scanned:.0%} scanned"
+                        current.stage = f"RF-DETR + OSNet ReID · {scanned:.0%} scanned"
                         self._save(current)
                 frame_index += step
         finally:
             capture.release()
+        person_tracks = self._consolidate_person_tracks(person_tracks)
         counters: dict[str, int] = {}
         subjects = []
-        for track in tracks.values():
+        for track in [*person_tracks, *object_tracks.values()]:
             if len(track["appearances"]) < 2:
                 continue
             counters[track["label"]] = counters.get(track["label"], 0) + 1
@@ -678,6 +724,250 @@ class IntelligenceManager:
                 )
             )
         return subjects
+
+    def _load_person_reid(self):
+        import cv2
+
+        weights = self.setup.person_reid_path / "osnet_x0_25_msmt17.onnx"
+        if not weights.exists():
+            raise RuntimeError("OSNet person ReID weights are missing; repair Pro setup")
+        return cv2.dnn.readNetFromONNX(str(weights))
+
+    @staticmethod
+    def _person_reid_embeddings(frame, boxes: list[tuple[float, ...]], model) -> np.ndarray:
+        import cv2
+
+        crops = []
+        height, width = frame.shape[:2]
+        mean = np.asarray([0.485, 0.456, 0.406], dtype=np.float32)
+        std = np.asarray([0.229, 0.224, 0.225], dtype=np.float32)
+        for x1, y1, x2, y2 in boxes:
+            left, top = max(0, int(x1)), max(0, int(y1))
+            right, bottom = min(width, math.ceil(x2)), min(height, math.ceil(y2))
+            crop = frame[top:bottom, left:right]
+            if not crop.size:
+                crop = np.zeros((256, 128, 3), dtype=np.uint8)
+            rgb = cv2.cvtColor(cv2.resize(crop, (128, 256)), cv2.COLOR_BGR2RGB)
+            normalized = (rgb.astype(np.float32) / 255 - mean) / std
+            crops.append(normalized.transpose(2, 0, 1))
+        outputs = []
+        for start in range(0, len(crops), 16):
+            batch = crops[start : start + 16]
+            count = len(batch)
+            batch.extend([batch[-1]] * (16 - count))
+            model.setInput(np.stack(batch))
+            outputs.append(model.forward().reshape(16, -1)[:count])
+        embeddings = np.concatenate(outputs) if outputs else np.empty((0, 512), dtype=np.float32)
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms[norms == 0] = 1
+        return embeddings / norms
+
+    def _associate_people(
+        self,
+        tracks: list[dict],
+        detections: list[dict],
+        embeddings: np.ndarray,
+        timestamp: float,
+        sample_seconds: float,
+        frame,
+        analysis_dir: Path,
+    ) -> None:
+        candidates = []
+        for detection_index, (detection, embedding) in enumerate(
+            zip(detections, embeddings, strict=False)
+        ):
+            for track_index, track in enumerate(tracks):
+                if track["last_time"] >= timestamp:
+                    continue
+                similarity = float(np.dot(track["descriptor"], embedding))
+                distance = self._box_center_distance(track["last_box"], detection["box"])
+                gap_steps = max(1, (timestamp - track["last_time"]) / sample_seconds)
+                previous_area = track["last_box"][2] * track["last_box"][3]
+                current_area = detection["box"][2] * detection["box"][3]
+                body_pair = previous_area >= 0.04 and current_area >= 0.04
+                if body_pair:
+                    threshold = 0.62 if gap_steps <= 8 else 0.68
+                    allowed_distance = min(1.0, 0.18 + gap_steps * 0.1)
+                else:
+                    threshold = 0.78
+                    allowed_distance = min(0.18, 0.08 + gap_steps * 0.015)
+                if similarity < threshold or distance > allowed_distance:
+                    continue
+                score = similarity + 0.18 * (1 - min(1, distance))
+                candidates.append((score, detection_index, track_index))
+
+        assignments: dict[int, int] = {}
+        assigned_tracks = set()
+        for _score, detection_index, track_index in sorted(candidates, reverse=True):
+            if detection_index in assignments or track_index in assigned_tracks:
+                continue
+            assignments[detection_index] = track_index
+            assigned_tracks.add(track_index)
+
+        for detection_index, (detection, embedding) in enumerate(
+            zip(detections, embeddings, strict=False)
+        ):
+            track_index = assignments.get(detection_index)
+            if track_index is None:
+                subject_id = uuid4().hex
+                track = {
+                    "id": subject_id,
+                    "label": "Person",
+                    "kind": "person",
+                    "appearances": [],
+                    "descriptor": embedding.copy(),
+                    "descriptor_samples": 0,
+                    "last_box": detection["box"],
+                    "last_time": timestamp,
+                    "best_area": 0.0,
+                }
+                tracks.append(track)
+            else:
+                track = tracks[track_index]
+            samples = min(12, track["descriptor_samples"])
+            descriptor = track["descriptor"] * samples + embedding
+            norm = float(np.linalg.norm(descriptor))
+            track["descriptor"] = descriptor / norm if norm else embedding.copy()
+            track["descriptor_samples"] += 1
+            track["last_box"] = detection["box"]
+            track["last_time"] = timestamp
+            track["appearances"].append(
+                SubjectAppearance(
+                    start=timestamp,
+                    end=timestamp + sample_seconds,
+                    box=BoundingBox(
+                        x=detection["box"][0],
+                        y=detection["box"][1],
+                        width=detection["box"][2],
+                        height=detection["box"][3],
+                    ),
+                    confidence=detection["confidence"],
+                )
+            )
+            area = detection["box"][2] * detection["box"][3]
+            if area > track["best_area"]:
+                track["best_area"] = area
+                self._write_subject_thumbnail(
+                    frame,
+                    detection["box"],
+                    analysis_dir / "subjects" / f"{track['id']}.jpg",
+                )
+
+    def _deduplicate_person_detections(
+        self,
+        detections: list[dict],
+        pixel_boxes: list[tuple[float, ...]],
+    ) -> tuple[list[dict], list[tuple[float, ...]]]:
+        kept = []
+        for index in sorted(
+            range(len(detections)),
+            key=lambda value: detections[value]["confidence"],
+            reverse=True,
+        ):
+            if any(
+                self._iou(detections[index]["box"], detections[other]["box"]) >= 0.6
+                for other in kept
+            ):
+                continue
+            kept.append(index)
+        return [detections[index] for index in kept], [pixel_boxes[index] for index in kept]
+
+    @staticmethod
+    def _box_center_distance(left: tuple[float, ...], right: tuple[float, ...]) -> float:
+        return math.dist(
+            (left[0] + left[2] / 2, left[1] + left[3] / 2),
+            (right[0] + right[2] / 2, right[1] + right[3] / 2),
+        )
+
+    def _consolidate_person_tracks(self, tracks: list[dict]) -> list[dict]:
+        groups: list[dict] = []
+        for track in sorted(tracks, key=lambda item: item["descriptor_samples"], reverse=True):
+            matches = []
+            track_times = {round(item.start, 3) for item in track["appearances"]}
+            for index, group in enumerate(groups):
+                group_times = {round(item.start, 3) for item in group["appearances"]}
+                body_pair = track["best_area"] >= 0.04 and group["best_area"] >= 0.04
+                shared_times = track_times & group_times
+                if shared_times:
+                    track_at = {
+                        round(item.start, 3): item for item in track["appearances"]
+                    }
+                    group_at = {
+                        round(item.start, 3): item for item in group["appearances"]
+                    }
+                    overlaps = [
+                        self._iou(
+                            (
+                                track_at[value].box.x,
+                                track_at[value].box.y,
+                                track_at[value].box.width,
+                                track_at[value].box.height,
+                            ),
+                            (
+                                group_at[value].box.x,
+                                group_at[value].box.y,
+                                group_at[value].box.width,
+                                group_at[value].box.height,
+                            ),
+                        )
+                        for value in shared_times
+                    ]
+                    mostly_duplicate = sum(value >= 0.45 for value in overlaps) >= math.ceil(
+                        len(overlaps) / 2
+                    )
+                    rare_collision = (
+                        body_pair
+                        and len(shared_times)
+                        / max(1, min(len(track_times), len(group_times)))
+                        <= 0.02
+                        and max(overlaps) >= 0.45
+                    )
+                    if not mostly_duplicate and not rare_collision:
+                        continue
+                similarity = float(np.dot(track["descriptor"], group["descriptor"]))
+                if body_pair:
+                    if similarity < 0.55:
+                        continue
+                else:
+                    if similarity < 0.82:
+                        continue
+                    track_box = self._median_appearance_box(track["appearances"])
+                    group_box = self._median_appearance_box(group["appearances"])
+                    if self._box_center_distance(track_box, group_box) > 0.14:
+                        continue
+                matches.append((similarity, index))
+            if not matches:
+                groups.append(track)
+                continue
+            _, index = max(matches)
+            group = groups[index]
+            group_samples = group["descriptor_samples"]
+            track_samples = track["descriptor_samples"]
+            descriptor = (
+                group["descriptor"] * group_samples + track["descriptor"] * track_samples
+            )
+            norm = float(np.linalg.norm(descriptor))
+            group["descriptor"] = descriptor / norm if norm else group["descriptor"]
+            group["descriptor_samples"] += track_samples
+            group["appearances"] = sorted(
+                [*group["appearances"], *track["appearances"]], key=lambda item: item.start
+            )
+            group["best_area"] = max(group["best_area"], track["best_area"])
+            if track["last_time"] > group["last_time"]:
+                group["last_time"] = track["last_time"]
+                group["last_box"] = track["last_box"]
+        return groups
+
+    @staticmethod
+    def _median_appearance_box(appearances: list[SubjectAppearance]) -> tuple[float, ...]:
+        values = np.asarray(
+            [
+                [item.box.x, item.box.y, item.box.width, item.box.height]
+                for item in appearances
+            ],
+            dtype=np.float32,
+        )
+        return tuple(float(value) for value in np.median(values, axis=0))
 
     def _associate_detections(
         self,
