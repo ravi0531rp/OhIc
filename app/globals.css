@@ -200,6 +200,13 @@ button { color: inherit; }
 .camera-pairing-copy p { color: #757b75; font-size: 9px; line-height: 1.55; }
 .camera-pairing-copy code { color: #939a92; display: block; font-size: 7px; overflow-wrap: anywhere; }
 .camera-live-preview { aspect-ratio: 16/9; background: #050605; border-radius: 9px; display: block; margin-top: 12px; object-fit: contain; width: 100%; }
+.camera-relay-state { border: 1px solid var(--line); border-radius: 9px; display: grid; gap: 5px; margin: 10px 0; padding: 10px; }
+.camera-relay-state strong { color: #a7ada6; font-size: 9px; }
+.camera-relay-state span { color: #747a73; font-size: 8px; line-height: 1.45; }
+.camera-relay-state.secure { background: rgba(217,255,103,.06); border-color: rgba(217,255,103,.24); }
+.camera-relay-state.secure strong { color: var(--accent); }
+.camera-relay-state button { background: var(--accent); border: 0; border-radius: 7px; color: var(--accent-ink); cursor: pointer; font-size: 8px; font-weight: 700; margin-top: 4px; padding: 9px; }
+.camera-relay-state button:disabled { cursor: wait; opacity: .55; }
 .camera-live-actions { display: grid; gap: 7px; grid-template-columns: 1fr 1fr; margin-top: 10px; }
 .camera-live-actions button { background: rgba(217,255,103,.08); border: 1px solid rgba(217,255,103,.28); border-radius: 8px; color: var(--accent); cursor: pointer; font-size: 8px; font-weight: 650; padding: 9px 7px; }
 .camera-live-actions button:last-child { background: var(--accent); color: var(--accent-ink); }

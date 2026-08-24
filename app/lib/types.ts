@@ -225,6 +225,8 @@ export type CameraSession = {
   stream_mode?: "frames" | "media";
   stream_mime_type?: string;
   checkpoint_count: number;
+  relay_status: "local" | "ready" | "failed";
+  relay_error?: string;
   created_at: string;
   video?: VideoRecord;
   error?: string;

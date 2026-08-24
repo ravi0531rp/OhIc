@@ -46,6 +46,7 @@ export function SourcePicker({ onLoaded, onCameraCheckpoint, onPlaylistStarted, 
   const [cameraQr, setCameraQr] = useState("");
   const [frameTick, setFrameTick] = useState(0);
   const [cameraCheckpointing, setCameraCheckpointing] = useState<"enhancement" | "pro" | null>(null);
+  const [cameraRelayStarting, setCameraRelayStarting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const eventsRef = useRef<EventSource | null>(null);
 
@@ -73,15 +74,30 @@ export function SourcePicker({ onLoaded, onCameraCheckpoint, onPlaylistStarted, 
     try {
       const session = await api.createCameraSession();
       setCamera(session);
-      setCameraQr(await QRCode.toDataURL(session.pairing_url, {
-        width: 240,
-        margin: 1,
-        color: { dark: "#111510", light: "#efffc4" },
-      }));
+      setCameraQr(await cameraQrCode(session.pairing_url));
     } catch (error) {
       onError(error instanceof Error ? error.message : "Phone camera pairing failed.");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const enableCameraRelay = async () => {
+    if (!camera) return;
+    const approved = window.confirm(
+      "Enable secure phone streaming?\n\nOhIc will create a temporary Cloudflare HTTPS relay. The camera page becomes reachable from the internet, protected by its one-time random pairing token. The relay closes when OhIc stops.",
+    );
+    if (!approved) return;
+    setCameraRelayStarting(true);
+    try {
+      const next = await api.enableCameraSecureRelay(camera.id);
+      const qr = await cameraQrCode(next.pairing_url);
+      setCamera(next);
+      setCameraQr(qr);
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Secure phone streaming could not start.");
+    } finally {
+      setCameraRelayStarting(false);
     }
   };
 
@@ -272,7 +288,7 @@ export function SourcePicker({ onLoaded, onCameraCheckpoint, onPlaylistStarted, 
         </>
       ) : tab === "camera" ? (
         <div className="camera-pairing-pane">
-          {!camera ? <div className="camera-pairing-empty"><span className="drop-icon"><FilmIcon size={25} /></span><strong>Stream from a phone on this Wi-Fi</strong><p>OhIc creates a one-time local pairing page. Supported browsers send durable video-and-audio chunks; native phone recording remains available as a fallback.</p><button disabled={busy} onClick={() => void startCamera()}>{busy ? "Opening pairing…" : "Create camera pairing"}</button></div> : <CameraPairingPanel camera={camera} cameraQr={cameraQr} frameTick={frameTick} checkpointing={cameraCheckpointing} onCancel={() => void cancelCamera()} onCheckpoint={(destination) => void openCameraCheckpoint(destination)} />}
+          {!camera ? <div className="camera-pairing-empty"><span className="drop-icon"><FilmIcon size={25} /></span><strong>Stream from a nearby phone</strong><p>Create a pairing, then enable the temporary secure relay for live browser capture. Native phone recording remains available over local Wi-Fi.</p><button disabled={busy} onClick={() => void startCamera()}>{busy ? "Opening pairing…" : "Create camera pairing"}</button></div> : <CameraPairingPanel camera={camera} cameraQr={cameraQr} frameTick={frameTick} checkpointing={cameraCheckpointing} relayStarting={cameraRelayStarting} onCancel={() => void cancelCamera()} onEnableRelay={() => void enableCameraRelay()} onCheckpoint={(destination) => void openCameraCheckpoint(destination)} />}
         </div>
       ) : (
         <div className="youtube-pane">
@@ -404,17 +420,22 @@ function CameraPairingPanel({
   cameraQr,
   frameTick,
   checkpointing,
+  relayStarting,
   onCancel,
+  onEnableRelay,
   onCheckpoint,
 }: {
   camera: CameraSession;
   cameraQr: string;
   frameTick: number;
   checkpointing: "enhancement" | "pro" | null;
+  relayStarting: boolean;
   onCancel: () => void;
+  onEnableRelay: () => void;
   onCheckpoint: (destination: "enhancement" | "pro") => void;
 }) {
   const streaming = camera.status === "streaming";
+  const secure = camera.relay_status === "ready" && camera.pairing_url.startsWith("https://");
   const hasBuffer = camera.segment_count > 0 || camera.frame_count >= 2;
   const statusLabel = camera.status === "waiting"
     ? "Waiting for phone"
@@ -430,6 +451,11 @@ function CameraPairingPanel({
       <div className="camera-pairing-copy" aria-live="polite">
         <span className="eyebrow">{statusLabel}</span>
         <h3>{camera.status === "waiting" ? "Scan with your phone" : streaming ? streamDetail : "Finishing the capture…"}</h3>
+        <div className={`camera-relay-state ${secure ? "secure" : "local"}`}>
+          <strong>{secure ? "Secure live streaming enabled" : "Local recording mode"}</strong>
+          <span>{secure ? "This temporary HTTPS relay closes when OhIc stops." : "Live camera access is blocked on a plain HTTP QR. Enable the secure relay before scanning for direct streaming."}</span>
+          {!secure && !["complete", "cancelled"].includes(camera.status) && <button disabled={relayStarting} onClick={onEnableRelay}>{relayStarting ? "Starting secure relay…" : camera.relay_status === "failed" ? "Retry secure relay" : "Enable secure live streaming"}</button>}
+        </div>
         <p>Each ordered chunk is stored before it is acknowledged. Create an immutable checkpoint at any time, then enhance it or analyze it in Pro while the phone keeps streaming.</p>
         <code>{camera.pairing_url}</code>
         {streaming && camera.frame_count > 0 && <img className="camera-live-preview" src={`${API_URL}/api/camera/sessions/${camera.id}/frame?t=${frameTick}`} alt="Live phone camera preview" />}
@@ -443,6 +469,14 @@ function CameraPairingPanel({
       </div>
     </div>
   );
+}
+
+function cameraQrCode(pairingUrl: string): Promise<string> {
+  return QRCode.toDataURL(pairingUrl, {
+    width: 240,
+    margin: 1,
+    color: { dark: "#111510", light: "#efffc4" },
+  });
 }
 
 function formatDuration(value: number): string {
