@@ -186,6 +186,22 @@ export type JobRecord = {
   processing_seconds?: number;
 };
 
+export type HistoryEntry = {
+  id: string;
+  kind: "enhancement" | "camera" | "pro";
+  reference_id: string;
+  video_id: string;
+  title: string;
+  detail: string;
+  status: string;
+  progress: number;
+  stage: string;
+  created_at: string;
+  updated_at: string;
+  can_pause: boolean;
+  can_cancel: boolean;
+};
+
 export type YouTubeMetadata = {
   url: string;
   title: string;

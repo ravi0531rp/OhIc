@@ -23,6 +23,7 @@ from app.core.device import detect_hardware
 from app.core.resources import resource_snapshot
 from app.schemas.batch import BatchCreateRequest, BatchRecord, PresetCreate, PresetRecord
 from app.schemas.comparison import ComparisonCreate, ComparisonRecord
+from app.schemas.history import HistoryEntry
 from app.schemas.intelligence import (
     AnalysisCreateRequest,
     AnalysisStatus,
@@ -56,12 +57,18 @@ from app.schemas.video import (
     YouTubeReliabilityReport,
 )
 from app.services.dependencies import dependency_status
+from app.services.history import list_history
 from app.services.videos import UploadTooLargeError
 from app.services.youtube import YouTubeError
 from app.utils.files import ensure_within
 from app.video.probe import VideoProbeError
 
 router = APIRouter(prefix="/api")
+
+
+@router.get("/history", response_model=list[HistoryEntry])
+def unified_history(limit: int = 100) -> list[HistoryEntry]:
+    return list_history(get_database(), min(max(limit, 1), 200))
 
 
 @router.post("/camera/sessions", response_model=CameraSession, status_code=201)

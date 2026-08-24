@@ -480,12 +480,12 @@ button { color: inherit; }
 .history-list time { color: #555a55; font-size: 8px; }
 .history-meta { align-items: flex-end; display: flex; flex-direction: column; gap: 5px; }
 .history-meta b { color: #858b84; font-size: 8px; font-weight: 550; white-space: nowrap; }
-.history-row:has(.job-status.processing) .history-meta b, .history-row:has(.job-status.preparing) .history-meta b, .history-row:has(.job-status.queued) .history-meta b, .history-row:has(.job-status.encoding) .history-meta b { color: #f4b45f; }
+.history-row:has(.job-status.processing) .history-meta b, .history-row:has(.job-status.preparing) .history-meta b, .history-row:has(.job-status.queued) .history-meta b, .history-row:has(.job-status.encoding) .history-meta b, .history-row:has(.job-status.transcribing) .history-meta b, .history-row:has(.job-status.tracking) .history-meta b, .history-row:has(.job-status.indexing) .history-meta b { color: #f4b45f; }
 .job-status { background: #777; border-radius: 50%; height: 7px; width: 7px; }
 .job-status.complete { background: var(--accent); }
 .job-status.failed { background: var(--danger); }
 .job-status.paused { background: #8fa1bc; }
-.job-status.processing, .job-status.preparing, .job-status.queued, .job-status.encoding { background: #f4b45f; }
+.job-status.processing, .job-status.preparing, .job-status.queued, .job-status.encoding, .job-status.transcribing, .job-status.tracking, .job-status.indexing { background: #f4b45f; }
 .history-empty { align-items: center; border: 1px dashed var(--line); border-radius: 13px; color: #606560; display: flex; flex-direction: column; gap: 7px; padding: 44px 20px; }
 .history-empty strong { color: #9ca09b; font-size: 11px; }
 .history-empty span { font-size: 9px; }
