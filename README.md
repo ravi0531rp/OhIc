@@ -245,6 +245,12 @@ Choose **Pro** in the top navigation. The first screen explains the local models
 size. Nothing is installed until you choose **Download Pro**; an interrupted download can be
 resumed.
 
+<p align="center">
+  <img src="public/sequence/pro-ai-workflow.gif" alt="Animated OhIc Pro Intelligence workflow showing video import, local analysis setup, tracked subjects, multilingual captions, and evidence-grounded chat" width="960">
+</p>
+
+<p align="center"><sub>Import a video, analyze speech and subjects locally, then search it with timestamp-grounded AI.</sub></p>
+
 After setup:
 
 1. Open an imported video and choose **Pro**, then **Analyze this video**.
