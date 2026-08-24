@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import html
 import json
 import math
 import re
 import subprocess
 import threading
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -44,6 +46,13 @@ TERMINAL_ANALYSIS_STATES = {
     AnalysisStatus.FAILED,
     AnalysisStatus.CANCELLED,
 }
+SUBTITLE_SIZE_STYLES = (
+    (64, "caption-92", 92),
+    (79, "caption-84", 84),
+    (97, "caption-76", 76),
+    (124, "caption-68", 68),
+    (math.inf, "caption-60", 60),
+)
 
 
 class QwenVideoRuntime:
@@ -1330,23 +1339,53 @@ class IntelligenceManager:
         )
 
     def _write_vtt(self, analysis: VideoAnalysis) -> None:
-        lines = ["WEBVTT", ""]
+        lines = ["WEBVTT", "", "STYLE"]
+        lines.extend(
+            f"::cue(.{class_name}) {{ font-size: {percentage}%; }}"
+            for _, class_name, percentage in SUBTITLE_SIZE_STYLES
+        )
+        lines.append("")
         for segment in analysis.transcript_segments:
+            text = html.escape(segment.text.replace("-->", "→"), quote=False)
+            size_class = self._subtitle_size_class(segment.text)
+            if size_class:
+                text = f"<c.{size_class}>{text}</c>"
             lines.extend(
                 [
                     f"{self._vtt_time(segment.start)} --> {self._vtt_time(segment.end)}",
-                    segment.text.replace("-->", "→"),
+                    text,
                     "",
                 ]
             )
         path = self._analysis_dir(analysis.id) / "subtitles.vtt"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("\n".join(lines), encoding="utf-8")
+        content = "\n".join(lines)
+        if not path.exists() or path.read_text(encoding="utf-8") != content:
+            path.write_text(content, encoding="utf-8")
+
+    @staticmethod
+    def _subtitle_size_class(text: str) -> str | None:
+        normalized = " ".join(text.split())
+        display_units = sum(
+            2 if unicodedata.east_asian_width(character) in {"W", "F"} else 1
+            for character in normalized
+            if not unicodedata.combining(character)
+        )
+        if display_units <= 52:
+            return None
+        return next(
+            class_name
+            for maximum, class_name, _ in SUBTITLE_SIZE_STYLES
+            if display_units <= maximum
+        )
 
     def _analysis_dir(self, analysis_id: str) -> Path:
         return self.root / "analyses" / analysis_id
 
     def subtitle_path(self, analysis_id: str) -> Path:
+        analysis = self.database.get_analysis(analysis_id)
+        if analysis and analysis.transcript_segments:
+            self._write_vtt(analysis)
         return self._analysis_dir(analysis_id) / "subtitles.vtt"
 
     def subject_thumbnail_path(self, analysis_id: str, subject_id: str) -> Path:
