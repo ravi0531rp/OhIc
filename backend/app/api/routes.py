@@ -112,6 +112,18 @@ def checkpoint_camera_session(session_id: str) -> VideoRecord:
         ) from exc
 
 
+@router.post("/camera/sessions/{session_id}/secure-relay", response_model=CameraSession)
+def enable_camera_secure_relay(session_id: str) -> CameraSession:
+    try:
+        return get_camera_manager().enable_secure_relay(session_id)
+    except ValueError as exc:
+        detail = str(exc)
+        raise HTTPException(
+            status_code=404 if detail == "Camera session not found." else 503,
+            detail=detail,
+        ) from exc
+
+
 @router.get("/pro/status", response_model=ProStatus)
 def pro_status() -> ProStatus:
     return get_pro_setup_service().status()

@@ -100,6 +100,12 @@ class CameraStreamMode(StrEnum):
     MEDIA = "media"
 
 
+class CameraRelayStatus(StrEnum):
+    LOCAL = "local"
+    READY = "ready"
+    FAILED = "failed"
+
+
 class CameraSession(BaseModel):
     id: str
     status: CameraSessionStatus = CameraSessionStatus.WAITING
@@ -111,6 +117,8 @@ class CameraSession(BaseModel):
     stream_mode: CameraStreamMode | None = None
     stream_mime_type: str | None = None
     checkpoint_count: int = 0
+    relay_status: CameraRelayStatus = CameraRelayStatus.LOCAL
+    relay_error: str | None = None
     created_at: datetime
     video: VideoRecord | None = None
     error: str | None = None

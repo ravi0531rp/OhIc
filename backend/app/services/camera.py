@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import html
+import queue
+import re
 import secrets
 import shutil
 import socket
 import subprocess
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -18,17 +21,24 @@ from typing import BinaryIO
 from urllib.parse import urlparse
 
 from app.core.config import Settings
-from app.schemas.video import CameraSession, CameraSessionStatus, CameraStreamMode, VideoRecord
+from app.schemas.video import (
+    CameraRelayStatus,
+    CameraSession,
+    CameraSessionStatus,
+    CameraStreamMode,
+    VideoRecord,
+)
 from app.services.phone_camera_page import render_phone_camera_page
 from app.services.videos import VideoService
 
 MAX_FRAME_BYTES = 2_000_000
 MAX_STREAM_CHUNK_BYTES = 24_000_000
 MAX_RECORDING_BYTES = 4_000_000_000
+RELAY_URL_PATTERN = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com", re.I)
 
 
 class CameraSessionManager:
-    """One-time, LAN-only phone camera bridge with token-scoped routes."""
+    """Token-scoped phone camera bridge with an optional managed HTTPS relay."""
 
     def __init__(self, settings: Settings, videos: VideoService):
         self.settings = settings
@@ -42,21 +52,31 @@ class CameraSessionManager:
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ohic-camera")
         self._server: ThreadingHTTPServer | None = None
         self._server_thread: threading.Thread | None = None
+        self._relay_lock = threading.RLock()
+        self._relay_process: subprocess.Popen[str] | None = None
+        self._relay_url: str | None = None
 
     def create(self) -> CameraSession:
         self._ensure_server()
+        self._refresh_relay_state()
         session_id = uuid.uuid4().hex
         token = secrets.token_urlsafe(24)
         assert self._server
         port = int(self._server.server_address[1])
-        pairing_base = self.settings.camera_pairing_base_url or (
-            f"http://{self._lan_address()}:{port}"
-        )
+        with self._relay_lock:
+            relay_url = self._relay_url
+        pairing_base = self.settings.camera_pairing_base_url or relay_url
+        pairing_base = pairing_base or f"http://{self._lan_address()}:{port}"
         pairing_url = f"{pairing_base.rstrip('/')}/camera/{token}"
         session = CameraSession(
             id=session_id,
             pairing_url=pairing_url,
             created_at=datetime.now(UTC),
+            relay_status=(
+                CameraRelayStatus.READY
+                if pairing_url.startswith("https://")
+                else CameraRelayStatus.LOCAL
+            ),
         )
         with self._lock:
             self._sessions[session_id] = session
@@ -65,9 +85,54 @@ class CameraSessionManager:
         return session.model_copy(deep=True)
 
     def get(self, session_id: str) -> CameraSession | None:
+        self._refresh_relay_state()
         with self._lock:
             session = self._sessions.get(session_id)
             return session.model_copy(deep=True) if session else None
+
+    def enable_secure_relay(self, session_id: str) -> CameraSession:
+        self._refresh_relay_state()
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if not session:
+                raise ValueError("Camera session not found.")
+            if session.pairing_url.startswith("https://"):
+                session.relay_status = CameraRelayStatus.READY
+                session.relay_error = None
+                return session.model_copy(deep=True)
+            token = next(
+                (token for token, value in self._tokens.items() if value == session_id),
+                None,
+            )
+            if not token:
+                raise ValueError("Camera pairing token is invalid or expired.")
+        assert self._server
+        port = int(self._server.server_address[1])
+        try:
+            relay_url = self._ensure_secure_relay(port)
+        except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            message = str(exc) or "The secure camera relay could not start."
+            with self._lock:
+                current = self._sessions.get(session_id)
+                if current:
+                    current.relay_status = CameraRelayStatus.FAILED
+                    current.relay_error = message
+            raise ValueError(message) from exc
+        with self._lock:
+            current = self._sessions.get(session_id)
+            if not current:
+                raise ValueError("Camera session not found.")
+            for active_token, active_session_id in self._tokens.items():
+                active = self._sessions.get(active_session_id)
+                if active and active.status not in {
+                    CameraSessionStatus.COMPLETE,
+                    CameraSessionStatus.CANCELLED,
+                    CameraSessionStatus.FAILED,
+                }:
+                    active.pairing_url = f"{relay_url}/camera/{active_token}"
+                    active.relay_status = CameraRelayStatus.READY
+                    active.relay_error = None
+            return current.model_copy(deep=True)
 
     def latest_frame(self, session_id: str) -> bytes | None:
         with self._lock:
@@ -261,12 +326,155 @@ class CameraSessionManager:
             return session.model_copy(deep=True)
 
     def close(self) -> None:
+        with self._relay_lock:
+            self._stop_relay_locked()
         with self._lock:
             if self._server:
                 self._server.shutdown()
                 self._server.server_close()
                 self._server = None
         self._executor.shutdown(wait=True, cancel_futures=True)
+
+    def _ensure_secure_relay(self, port: int) -> str:
+        with self._relay_lock:
+            if (
+                self._relay_process
+                and self._relay_process.poll() is None
+                and self._relay_url
+            ):
+                return self._relay_url
+            self._stop_relay_locked()
+            command = self._relay_command(port)
+            process = subprocess.Popen(  # noqa: S603 - fixed executable and arguments
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            self._relay_process = process
+            output: queue.Queue[str] = queue.Queue(maxsize=200)
+
+            def read_output() -> None:
+                assert process.stdout
+                for line in process.stdout:
+                    try:
+                        output.put_nowait(line.rstrip())
+                    except queue.Full:
+                        try:
+                            output.get_nowait()
+                            output.put_nowait(line.rstrip())
+                        except queue.Empty:
+                            pass
+
+            threading.Thread(
+                target=read_output,
+                name="ohic-camera-relay-output",
+                daemon=True,
+            ).start()
+            try:
+                relay_url = self._read_relay_url(process, output)
+                self._wait_for_relay(process, output)
+            except Exception:
+                self._stop_relay_locked()
+                raise
+            self._relay_url = relay_url.rstrip("/")
+            return self._relay_url
+
+    def _relay_command(self, port: int) -> list[str]:
+        origin = f"http://127.0.0.1:{port}"
+        configured = self.settings.cloudflared_path
+        cloudflared = str(configured) if configured else shutil.which("cloudflared")
+        if cloudflared:
+            if not Path(cloudflared).is_file():
+                raise RuntimeError(f"Configured cloudflared executable was not found: {cloudflared}")
+            return [
+                cloudflared,
+                "tunnel",
+                "--no-autoupdate",
+                "--url",
+                origin,
+                "--loglevel",
+                "info",
+            ]
+        raise RuntimeError(
+            "Secure streaming needs cloudflared. Install it with 'brew install cloudflared' "
+            "or set OHIC_CLOUDFLARED_PATH, then try again."
+        )
+
+    @staticmethod
+    def _read_relay_url(
+        process: subprocess.Popen[str], output: queue.Queue[str]
+    ) -> str:
+        deadline = time.monotonic() + 60
+        recent: list[str] = []
+        while time.monotonic() < deadline:
+            if process.poll() is not None and output.empty():
+                detail = "\n".join(recent[-5:])
+                raise RuntimeError(detail or "The secure camera relay exited before it was ready.")
+            try:
+                line = output.get(timeout=min(0.5, deadline - time.monotonic()))
+            except queue.Empty:
+                continue
+            recent.append(line)
+            match = RELAY_URL_PATTERN.search(line)
+            if match:
+                return match.group(0)
+        raise RuntimeError("Timed out while starting the secure camera relay.")
+
+    @staticmethod
+    def _wait_for_relay(
+        process: subprocess.Popen[str], output: queue.Queue[str]
+    ) -> None:
+        deadline = time.monotonic() + 30
+        recent: list[str] = []
+        while time.monotonic() < deadline:
+            if process.poll() is not None and output.empty():
+                detail = "\n".join(recent[-5:])
+                raise RuntimeError(
+                    detail or "The secure camera relay stopped during startup."
+                )
+            try:
+                line = output.get(timeout=min(0.5, deadline - time.monotonic()))
+            except queue.Empty:
+                continue
+            recent.append(line)
+            if "registered tunnel connection" in line.lower():
+                return
+        raise RuntimeError("The secure relay did not establish an edge connection in time.")
+
+    def _refresh_relay_state(self) -> None:
+        with self._relay_lock:
+            process = self._relay_process
+            if not process or process.poll() is None:
+                return
+            self._relay_process = None
+            self._relay_url = None
+        with self._lock:
+            if not self._server:
+                return
+            port = int(self._server.server_address[1])
+            local_base = f"http://{self._lan_address()}:{port}"
+            for token, session_id in self._tokens.items():
+                session = self._sessions.get(session_id)
+                if session and session.relay_status == CameraRelayStatus.READY:
+                    session.pairing_url = f"{local_base}/camera/{token}"
+                    session.relay_status = CameraRelayStatus.FAILED
+                    session.relay_error = "The secure relay stopped. Enable it again to continue."
+
+    def _stop_relay_locked(self) -> None:
+        process = self._relay_process
+        self._relay_process = None
+        self._relay_url = None
+        if not process or process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=2)
 
     def phone_page(self, token: str) -> str:
         with self._lock:
@@ -391,6 +599,15 @@ class CameraSessionManager:
                         return
                     self.send_response(HTTPStatus.OK)
                     self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Referrer-Policy", "no-referrer")
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.send_header(
+                        "Content-Security-Policy",
+                        "default-src 'self'; img-src 'self' data: blob:; "
+                        "media-src blob:; connect-src 'self'; "
+                        "style-src 'unsafe-inline'; script-src 'unsafe-inline'",
+                    )
                     self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
                     self.wfile.write(body)

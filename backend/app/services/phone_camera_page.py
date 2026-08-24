@@ -118,7 +118,7 @@ _PAGE = r"""<!doctype html>
 
     async function startLive() {
       if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
-        status.textContent = 'This browser requires a secure camera page. Use native recording below.';
+        status.textContent = 'This QR uses plain HTTP. Enable secure live streaming in OhIc, then scan the refreshed QR. You can also use native recording below.';
         return;
       }
       try {

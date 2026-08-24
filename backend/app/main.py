@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.dependencies import (
     get_batch_manager,
+    get_camera_manager,
     get_comparison_manager,
     get_database,
     get_intelligence_manager,
@@ -46,7 +47,12 @@ async def lifespan(app: FastAPI):
     get_comparison_manager()
     get_intelligence_manager().recover_interrupted()
     clean_stale_temp(settings.data_dir / "temp", settings.stale_temp_hours)
-    yield
+    try:
+        yield
+    finally:
+        if get_camera_manager.cache_info().currsize:
+            get_camera_manager().close()
+            get_camera_manager.cache_clear()
 
 
 app = FastAPI(
