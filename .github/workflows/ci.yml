@@ -61,13 +61,13 @@ jobs:
         run: uv sync --frozen --group dev
       - name: Build versioned DMG
         env:
-          OHIC_BUILD_VERSION: 0.1.0.${{ github.run_number }}-${{ github.sha }}
+          OHIC_BUILD_VERSION: 0.1.1.${{ github.run_number }}-${{ github.sha }}
         run: chmod +x scripts/build-dmg.sh && scripts/build-dmg.sh
       - name: Smoke test mounted application
         run: scripts/smoke-dmg.sh release/*.dmg
       - uses: actions/upload-artifact@v4
         with:
-          name: OhIc-macos-0.1.0.${{ github.run_number }}-${{ github.sha }}
+          name: OhIc-macos-0.1.1.${{ github.run_number }}-${{ github.sha }}
           path: release/*.dmg
           if-no-files-found: error
           retention-days: 30
