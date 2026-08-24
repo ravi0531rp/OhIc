@@ -5,7 +5,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { JobRecord, VideoRecord } from "../lib/types";
 import { mediaUrl } from "../lib/api";
-import { ArrowLeftIcon, DownloadIcon, FilmIcon, PlaylistIcon } from "./Icons";
+import {
+  ArrowLeftIcon,
+  DownloadIcon,
+  FilmIcon,
+  PauseIcon,
+  PlayIcon,
+  PlaylistIcon,
+  SparkIcon,
+  VolumeIcon,
+  VolumeOffIcon,
+} from "./Icons";
 
 type Props = {
   job: JobRecord;
@@ -13,14 +23,19 @@ type Props = {
   onBack: () => void;
   onAnother: () => void;
   onPlaylists: () => void;
+  onOpenPro?: () => void;
 };
 
-export function ComparisonViewer({ job, video, onBack, onAnother, onPlaylists }: Props) {
+export function ComparisonViewer({ job, video, onBack, onAnother, onPlaylists, onOpenPro }: Props) {
   const originalRef = useRef<HTMLVideoElement>(null);
   const enhancedRef = useRef<HTMLVideoElement>(null);
   const [mode, setMode] = useState<"wipe" | "side">("wipe");
   const [position, setPosition] = useState(50);
   const [zoom, setZoom] = useState<"fit" | "100" | "200">("fit");
+  const [playing, setPlaying] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(video.metadata.duration || 0);
   const originalSource = mediaUrl(job.original_preview_url ?? video.playback_url);
   const enhancedSource = mediaUrl(job.output_url);
   const fps = video.metadata.fps || 30;
@@ -66,6 +81,21 @@ export function ComparisonViewer({ job, video, onBack, onAnother, onPlaylists }:
     sync(true);
   };
 
+  const togglePlayback = () => {
+    const source = originalRef.current;
+    if (!source) return;
+    if (source.paused) void source.play().catch(() => undefined);
+    else source.pause();
+  };
+
+  const seekTo = (value: number) => {
+    const source = originalRef.current;
+    if (!source) return;
+    source.currentTime = Math.max(0, Math.min(duration || Infinity, value));
+    setCurrentTime(source.currentTime);
+    sync(true);
+  };
+
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
@@ -93,7 +123,7 @@ export function ComparisonViewer({ job, video, onBack, onAnother, onPlaylists }:
           <span className="eyebrow">Enhancement complete</span>
           <h1>See what changed.</h1>
         </div>
-        <div className="compare-actions"><button onClick={onPlaylists}><PlaylistIcon size={17} /> Playlists</button><a className="download-button" href={enhancedSource} download><DownloadIcon size={18} /> Download video</a></div>
+        <div className="compare-actions">{onOpenPro ? <button onClick={onOpenPro}><SparkIcon size={17} /> Analyze in Pro</button> : null}<button onClick={onPlaylists}><PlaylistIcon size={17} /> Playlists</button><a className="download-button" href={enhancedSource} download><DownloadIcon size={18} /> Download video</a></div>
       </header>
 
       <section className="viewer-shell">
@@ -116,7 +146,18 @@ export function ComparisonViewer({ job, video, onBack, onAnother, onPlaylists }:
           <div className={`video-comparison ${mode}`} style={{ transform: `scale(${scale})` }}>
             {mode === "wipe" ? (
               <>
-                <video ref={originalRef} className="original-video" controls playsInline src={originalSource} />
+                <video
+                  ref={originalRef}
+                  className="original-video"
+                  muted={muted}
+                  playsInline
+                  src={originalSource}
+                  onDurationChange={(event) => setDuration(event.currentTarget.duration || video.metadata.duration || 0)}
+                  onEnded={() => setPlaying(false)}
+                  onPause={() => setPlaying(false)}
+                  onPlay={() => setPlaying(true)}
+                  onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+                />
                 <div className="enhanced-clip" style={{ clipPath: `inset(0 0 0 ${position}%)` }}>
                   <video ref={enhancedRef} muted playsInline src={enhancedSource} />
                 </div>
@@ -135,11 +176,31 @@ export function ComparisonViewer({ job, video, onBack, onAnother, onPlaylists }:
               </>
             ) : (
               <>
-                <div className="side-video"><span className="video-label">Original</span><video ref={originalRef} controls playsInline src={originalSource} /></div>
+                <div className="side-video"><span className="video-label">Original</span><video ref={originalRef} muted={muted} playsInline src={originalSource} onDurationChange={(event) => setDuration(event.currentTarget.duration || video.metadata.duration || 0)} onEnded={() => setPlaying(false)} onPause={() => setPlaying(false)} onPlay={() => setPlaying(true)} onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)} /></div>
                 <div className="side-video"><span className="video-label">Enhanced</span><video ref={enhancedRef} muted playsInline src={enhancedSource} /></div>
               </>
             )}
           </div>
+        </div>
+
+        <div className="comparison-transport">
+          <button className="transport-icon" type="button" onClick={togglePlayback} aria-label={playing ? "Pause comparison" : "Play comparison"}>
+            {playing ? <PauseIcon size={15} /> : <PlayIcon size={15} />}
+          </button>
+          <span>{formatTime(currentTime)}</span>
+          <input
+            aria-label="Comparison playback position"
+            max={Math.max(duration, 0.01)}
+            min="0"
+            step="0.01"
+            type="range"
+            value={Math.min(currentTime, Math.max(duration, 0.01))}
+            onChange={(event) => seekTo(Number(event.target.value))}
+          />
+          <span>{formatTime(duration)}</span>
+          <button className="transport-icon" type="button" onClick={() => setMuted((value) => !value)} aria-label={muted ? "Unmute comparison" : "Mute comparison"}>
+            {muted ? <VolumeOffIcon size={15} /> : <VolumeIcon size={15} />}
+          </button>
         </div>
 
         <div className="frame-tools">
