@@ -16,6 +16,7 @@ type ProIntelligenceWorkspaceProps = {
   video: VideoRecord | null;
   onClose: () => void;
   onChooseSource: () => void;
+  onEnhance: () => void;
   onSelectAnalysis: (analysis: VideoAnalysis) => void;
   onError: (message: string) => void;
 };
@@ -26,6 +27,7 @@ export function ProIntelligenceWorkspace({
   video,
   onClose,
   onChooseSource,
+  onEnhance,
   onSelectAnalysis,
   onError,
 }: ProIntelligenceWorkspaceProps) {
@@ -40,6 +42,10 @@ export function ProIntelligenceWorkspace({
   const [asking, setAsking] = useState(false);
   const [names, setNames] = useState<Record<string, string>>({});
   const [transcriptQuery, setTranscriptQuery] = useState("");
+  const [transcriptionEngine, setTranscriptionEngine] = useState<"whisper_multilingual" | "tara_hinglish">("whisper_multilingual");
+  const [transcriptLanguage, setTranscriptLanguage] = useState("");
+  const [trackObjects, setTrackObjects] = useState(true);
+  const [retrievalSources, setRetrievalSources] = useState<Array<"transcript" | "visual">>(["transcript", "visual"]);
   const player = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
@@ -108,7 +114,14 @@ export function ProIntelligenceWorkspace({
   const startAnalysis = async () => {
     if (!video) return;
     try {
-      const record = await api.createAnalysis(video.id);
+      const record = await api.createAnalysis({
+        video_id: video.id,
+        transcribe: true,
+        track_people: true,
+        track_objects: trackObjects,
+        transcript_language: transcriptionEngine === "whisper_multilingual" ? transcriptLanguage || undefined : undefined,
+        transcription_engine: transcriptionEngine,
+      });
       setAnalysis(record);
       setAnalyses((current) => [record, ...current.filter((item) => item.id !== record.id)]);
     } catch (error) {
@@ -148,6 +161,7 @@ export function ProIntelligenceWorkspace({
         question: value,
         session_id: session?.id === "pending" ? undefined : session?.id,
         current_time: currentTime,
+        retrieval_sources: retrievalSources,
       });
       setSession(response.session);
     } catch (error) {
@@ -195,8 +209,8 @@ export function ProIntelligenceWorkspace({
           <p>Download one private intelligence bundle when you want it. Videos, identities, transcripts, and questions stay on this computer.</p>
           <div className="pro-model-grid">
             <ModelLine label="Video reasoning" value={status.qwen_model.includes("2B") ? "Qwen3-VL 2B · portable" : "Qwen3-VL 4B · 4-bit"} detail={status.qwen_model} />
-            <ModelLine label="Audio transcription" value="Whisper large-v3 turbo" detail={status.whisper_model} />
-            <ModelLine label="Subject tracking" value="Local multi-person tracker" detail="No biometric identity guessing" />
+            <ModelLine label="Audio transcription" value="Whisper multilingual + Tara Hinglish" detail={`${status.whisper_model} · ${status.hinglish_model}`} />
+            <ModelLine label="Subject tracking" value={status.detector_model} detail="Modern object detection with persistent local tracks" />
           </div>
           {status.state === "installing" ? (
             <div className="pro-install-progress">
@@ -238,11 +252,11 @@ export function ProIntelligenceWorkspace({
     <main className="pro-shell pro-workspace">
       <header className="pro-header">
         <div><span className="pro-kicker"><SparkIcon size={15} /> Pro Intelligence</span><h1>{video.title ?? video.original_name}</h1></div>
-        <div className="pro-header-actions"><button onClick={() => void api.unloadPro()}>Release AI memory</button><button className="icon-button" onClick={onClose} aria-label="Close Pro"><XIcon size={20} /></button></div>
+        <div className="pro-header-actions"><button className="pro-handoff" onClick={onEnhance}>Enhance this video</button><button onClick={() => void api.unloadPro()}>Release AI memory</button><button className="icon-button" onClick={onClose} aria-label="Close Pro"><XIcon size={20} /></button></div>
       </header>
 
       {!analysis ? (
-        <section className="pro-start-card"><div className="pro-orbit"><SparkIcon size={30} /></div><h2>Make this video searchable</h2><p>OhIc will transcribe speech, find people, create subtitles, and index key moments locally. Your original remains untouched.</p><button className="pro-primary" onClick={() => void startAnalysis()}>Analyze this video</button></section>
+        <section className="pro-start-card"><div className="pro-orbit"><SparkIcon size={30} /></div><h2>Make this video searchable</h2><p>Choose the local models used for speech and visual indexing. Your original remains untouched.</p><div className="analysis-recipe"><label>Transcription model<select value={transcriptionEngine} onChange={(event) => setTranscriptionEngine(event.target.value as typeof transcriptionEngine)}><option value="whisper_multilingual">Whisper large-v3 turbo · multilingual</option><option value="tara_hinglish">Tara · Hindi + English code-switching</option></select></label>{transcriptionEngine === "whisper_multilingual" && <label>Spoken language<select value={transcriptLanguage} onChange={(event) => setTranscriptLanguage(event.target.value)}><option value="">Auto-detect</option><option value="en">English</option><option value="hi">Hindi</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option><option value="ja">Japanese</option><option value="ko">Korean</option><option value="zh">Chinese</option><option value="ar">Arabic</option><option value="pt">Portuguese</option><option value="ru">Russian</option></select></label>}<label className="analysis-check"><input type="checkbox" checked={trackObjects} onChange={(event) => setTrackObjects(event.target.checked)} /> Detect and track common objects as well as people</label></div><button className="pro-primary" onClick={() => void startAnalysis()}>Analyze this video</button></section>
       ) : analysis.status !== "ready" ? (
         <section className="pro-start-card"><span className="pro-badge">ANALYZING LOCALLY</span><h2>{analysis.stage}</h2><div className="pro-install-progress"><div><strong>{video.original_name}</strong><span>{Math.round(analysis.progress)}%</span></div><i><b style={{ width: `${analysis.progress}%` }} /></i></div>{analysis.error && <p className="pro-setup-error">{analysis.error}</p>}{!TERMINAL.has(analysis.status) && <button className="pro-secondary danger" onClick={() => void api.cancelAnalysis(analysis.id).then(setAnalysis)}>Cancel analysis</button>}{["failed", "cancelled"].includes(analysis.status) && <button className="pro-primary" onClick={() => void startAnalysis()}>Analyze again</button>}</section>
       ) : (
@@ -259,7 +273,7 @@ export function ProIntelligenceWorkspace({
           </section>
           <aside className="pro-dock">
             <div className="pro-tabs">{(["ask", "subjects", "transcript"] as const).map((value) => <button key={value} className={tab === value ? "active" : ""} onClick={() => setTab(value)}>{value === "ask" ? "Ask" : value === "subjects" ? `Subjects ${analysis.subjects.length}` : "Transcript"}</button>)}</div>
-            {tab === "ask" && <AskPanel session={session} question={question} asking={asking} onQuestion={setQuestion} onSubmit={ask} onSeek={seek} />}
+            {tab === "ask" && <AskPanel session={session} question={question} asking={asking} retrievalSources={retrievalSources} onRetrievalSources={setRetrievalSources} onQuestion={setQuestion} onSubmit={ask} onSeek={seek} />}
             {tab === "subjects" && <SubjectsPanel subjects={analysis.subjects} identities={identities} names={names} onName={(id, value) => setNames((current) => ({ ...current, [id]: value }))} onTag={tag} onSeek={seek} />}
             {tab === "transcript" && <TranscriptPanel segments={transcript} query={transcriptQuery} onQuery={setTranscriptQuery} onSeek={seek} />}
           </aside>
@@ -273,13 +287,20 @@ function ModelLine({ label, value, detail }: { label: string; value: string; det
   return <div><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>;
 }
 
-function AskPanel({ session, question, asking, onQuestion, onSubmit, onSeek }: { session: ChatSession | null; question: string; asking: boolean; onQuestion: (value: string) => void; onSubmit: (event: FormEvent) => void; onSeek: (time: number) => void }) {
-  return <div className="pro-panel ask-panel"><div className="chat-scroll">{!session?.messages.length && <div className="chat-welcome"><SparkIcon size={24} /><h3>Ask this video</h3><p>Try “What is explained at 12:30?”, “When does Alex appear?”, or “Summarize the opening.” Every answer is grounded in local timestamps.</p></div>}{session?.messages.map((message) => <article key={message.id} className={`chat-message ${message.role}`}><span>{message.role === "assistant" ? "OhIc" : "You"}</span><p>{message.content}</p>{message.citations.length > 0 && <div className="citation-row">{message.citations.map((citation, index) => <button key={`${citation.kind}-${citation.start}-${index}`} onClick={() => onSeek(citation.start)}>{citation.label}</button>)}</div>}{message.tool_calls.length > 0 && <details><summary>{message.tool_calls.length} local tools used</summary>{message.tool_calls.map((tool) => <small key={tool.name}>{tool.name} · {tool.result_count} results</small>)}</details>}</article>)}{asking && <div className="chat-thinking"><i /><i /><i /> Inspecting local evidence</div>}</div><form className="chat-composer" onSubmit={onSubmit}><textarea value={question} onChange={(event) => onQuestion(event.target.value)} placeholder="Ask about a moment, person, or idea…" rows={3} /><button className="pro-primary" disabled={!question.trim() || asking}>Ask locally</button></form></div>;
+function AskPanel({ session, question, asking, retrievalSources, onRetrievalSources, onQuestion, onSubmit, onSeek }: { session: ChatSession | null; question: string; asking: boolean; retrievalSources: Array<"transcript" | "visual">; onRetrievalSources: (value: Array<"transcript" | "visual">) => void; onQuestion: (value: string) => void; onSubmit: (event: FormEvent) => void; onSeek: (time: number) => void }) {
+  const toggleSource = (source: "transcript" | "visual") => {
+    if (retrievalSources.includes(source)) {
+      if (retrievalSources.length > 1) onRetrievalSources(retrievalSources.filter((value) => value !== source));
+    } else {
+      onRetrievalSources([...retrievalSources, source]);
+    }
+  };
+  return <div className="pro-panel ask-panel"><div className="chat-scroll">{!session?.messages.length && <div className="chat-welcome"><SparkIcon size={24} /><h3>Ask this video</h3><p>Try “What is explained at 12:30?”, “When does Alex appear?”, or “Summarize the opening.” Every answer is grounded in local timestamps.</p></div>}{session?.messages.map((message) => <article key={message.id} className={`chat-message ${message.role}`}><span>{message.role === "assistant" ? "OhIc" : "You"}</span><p>{message.content}</p>{message.citations.length > 0 && <div className="citation-row">{message.citations.map((citation, index) => <button key={`${citation.kind}-${citation.start}-${index}`} onClick={() => onSeek(citation.start)}>{citation.label}</button>)}</div>}{message.tool_calls.length > 0 && <details><summary>{message.tool_calls.length} local tools used</summary>{message.tool_calls.map((tool) => <small key={tool.name}>{tool.name} · {tool.result_count} results</small>)}</details>}</article>)}{asking && <div className="chat-thinking"><i /><i /><i /> Inspecting local evidence</div>}</div><form className="chat-composer" onSubmit={onSubmit}><div className="rag-source-picker"><span>Search over</span><button type="button" className={retrievalSources.includes("transcript") ? "active" : ""} onClick={() => toggleSource("transcript")}>Transcript embeddings</button><button type="button" className={retrievalSources.includes("visual") ? "active" : ""} onClick={() => toggleSource("visual")}>Video embeddings</button></div><textarea value={question} onChange={(event) => onQuestion(event.target.value)} placeholder="Ask about a moment, person, or idea…" rows={3} /><button className="pro-primary" disabled={!question.trim() || asking}>Ask locally</button></form></div>;
 }
 
 function SubjectsPanel({ subjects, identities, names, onName, onTag, onSeek }: { subjects: SubjectRecord[]; identities: IdentityRecord[]; names: Record<string, string>; onName: (id: string, value: string) => void; onTag: (subject: SubjectRecord, identityId?: string) => void; onSeek: (time: number) => void }) {
   /* eslint-disable-next-line @next/next/no-img-element -- image is served by the private local API */
-  return <div className="pro-panel subject-panel">{subjects.length === 0 ? <div className="panel-empty"><h3>No confident people tracks</h3><p>Low light, animation, or distant subjects can limit automatic detection. The transcript and video chat still work.</p></div> : subjects.map((subject) => <article className="subject-card" key={subject.id}>{subject.thumbnail_url ? <img src={mediaUrl(subject.thumbnail_url)} alt="Tracked subject" /> : <div className="subject-placeholder" />}<div><strong>{subject.label}</strong><span>{subject.appearances.length} tracked moments</span></div><div className="subject-times">{subject.appearances.slice(0, 5).map((item) => <button key={item.start} onClick={() => onSeek(item.start)}>{formatTime(item.start)}</button>)}</div><select value={subject.identity_id ?? ""} onChange={(event) => event.target.value && void onTag(subject, event.target.value)}><option value="">Link a remembered person…</option>{identities.map((identity) => <option key={identity.id} value={identity.id}>{identity.name}</option>)}</select><div className="subject-name"><input value={names[subject.id] ?? ""} onChange={(event) => onName(subject.id, event.target.value)} placeholder="Or name this person" /><button onClick={() => void onTag(subject)}>Remember</button></div></article>)}</div>;
+  return <div className="pro-panel subject-panel">{subjects.length === 0 ? <div className="panel-empty"><h3>No confident subject tracks</h3><p>Low light, animation, or distant subjects can limit automatic detection. The transcript and video chat still work.</p></div> : subjects.map((subject) => <article className="subject-card" key={subject.id}>{subject.thumbnail_url ? <img src={mediaUrl(subject.thumbnail_url)} alt="Tracked subject" /> : <div className="subject-placeholder" />}<div><strong>{subject.label}</strong><span>{subject.kind} · {subject.appearances.length} tracked moments</span></div><div className="subject-times">{subject.appearances.slice(0, 5).map((item) => <button key={item.start} onClick={() => onSeek(item.start)}>{formatTime(item.start)}</button>)}</div>{subject.kind === "person" && <><select value={subject.identity_id ?? ""} onChange={(event) => event.target.value && void onTag(subject, event.target.value)}><option value="">Link a remembered person…</option>{identities.map((identity) => <option key={identity.id} value={identity.id}>{identity.name}</option>)}</select><div className="subject-name"><input value={names[subject.id] ?? ""} onChange={(event) => onName(subject.id, event.target.value)} placeholder="Or name this person" /><button onClick={() => void onTag(subject)}>Remember</button></div></>}</article>)}</div>;
 }
 
 function TranscriptPanel({ segments, query, onQuery, onSeek }: { segments: VideoAnalysis["transcript_segments"]; query: string; onQuery: (value: string) => void; onSeek: (time: number) => void }) {

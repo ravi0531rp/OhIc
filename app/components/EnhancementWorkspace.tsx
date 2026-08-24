@@ -12,6 +12,7 @@ type Props = {
   models: EnhancementModel[];
   initialJob?: JobRecord | null;
   busy: boolean;
+  onOpenPro: () => void;
   onRun: (
     kind: JobKind,
     target: ResolutionTarget,
@@ -57,7 +58,7 @@ function formatBytes(bytes: number) {
   return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
 }
 
-export function EnhancementWorkspace({ video, models, initialJob, busy, onRun, onMultiPreview }: Props) {
+export function EnhancementWorkspace({ video, models, initialJob, busy, onOpenPro, onRun, onMultiPreview }: Props) {
   const [selected, setSelected] = useState(
     video.targets.find(
       (target) =>
@@ -93,6 +94,19 @@ export function EnhancementWorkspace({ video, models, initialJob, busy, onRun, o
     selectedModel?.max_input_pixels
       && video.metadata.width * video.metadata.height > selectedModel.max_input_pixels,
   );
+  const isDownsizing = selected.height < video.metadata.height;
+
+  const selectTarget = (target: ResolutionTarget) => {
+    setSelected(target);
+    if (
+      target.height < video.metadata.height
+      && models.some((model) => model.identifier === "resize-lanczos")
+    ) {
+      setModelId("resize-lanczos");
+    } else if (modelId === "resize-lanczos") {
+      setModelId("realesrgan-x2plus");
+    }
+  };
 
   useEffect(() => {
     const player = playerRef.current;
@@ -229,17 +243,19 @@ export function EnhancementWorkspace({ video, models, initialJob, busy, onRun, o
         <div className="control-heading">
           <span className="eyebrow">Enhancement setup</span>
           <h1>Bring the detail forward.</h1>
-          <p>OhIc selected sensible targets for this {video.metadata.resolution_label} source.</p>
+          <p>Upscale for restoration or create a smaller, lighter export.</p>
+          <button className="context-handoff" type="button" onClick={onOpenPro}><SparkIcon size={14} /> Continue in Pro Intelligence</button>
         </div>
 
         <section className="control-section">
           <div className="section-label"><span>01</span><div><strong>Enhance to</strong><small>Aspect ratio stays {video.metadata.aspect_ratio}</small></div></div>
           <div className="resolution-options">
             {video.targets.map((target) => (
-              <button disabled={busy} key={`${target.width}x${target.height}`} className={selected === target ? "selected" : ""} onClick={() => setSelected(target)}>
+              <button disabled={busy} key={`${target.width}x${target.height}`} className={selected === target ? "selected" : ""} onClick={() => selectTarget(target)}>
                 <span>{target.label}</span>
                 <small>{target.width} × {target.height}</small>
                 {target.recommended && <em>Recommended</em>}
+                {target.height < video.metadata.height && <em className="downsize-badge">Smaller</em>}
               </button>
             ))}
           </div>
@@ -259,7 +275,7 @@ export function EnhancementWorkspace({ video, models, initialJob, busy, onRun, o
         </section>
 
         <section className="control-section">
-          <div className="section-label"><span>03</span><div><strong>AI engine</strong><small>Real-ESRGAN remains the default</small></div></div>
+          <div className="section-label"><span>03</span><div><strong>{isDownsizing ? "Resize engine" : "AI engine"}</strong><small>{isDownsizing ? "No generated pixels for smaller exports" : "Real-ESRGAN remains the default"}</small></div></div>
           <div className="engine-options">
             {models.map((model) => {
               const unavailable = Boolean(

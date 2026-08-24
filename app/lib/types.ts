@@ -35,7 +35,7 @@ export type VideoMetadata = {
 
 export type VideoRecord = {
   id: string;
-  source_type: "upload" | "youtube";
+  source_type: "upload" | "youtube" | "camera";
   original_name: string;
   metadata: VideoMetadata;
   targets: ResolutionTarget[];
@@ -196,6 +196,16 @@ export type YouTubeMetadata = {
   height?: number;
   fps?: number;
   notice: string;
+};
+
+export type CameraSession = {
+  id: string;
+  status: "waiting" | "streaming" | "processing" | "complete" | "cancelled" | "failed";
+  pairing_url: string;
+  frame_count: number;
+  created_at: string;
+  video?: VideoRecord;
+  error?: string;
 };
 
 export type YouTubeDownloadRecord = {
@@ -367,6 +377,8 @@ export type ProStatus = {
   detail: string;
   qwen_model: string;
   whisper_model: string;
+  hinglish_model: string;
+  detector_model: string;
   estimated_download_bytes: number;
   installed_at?: string;
   error?: string;
@@ -403,6 +415,8 @@ export type VideoAnalysis = {
   progress: number;
   stage: string;
   transcript_language?: string;
+  transcription_engine: "whisper_multilingual" | "tara_hinglish";
+  tracking_model: string;
   transcript_segments: TranscriptSegment[];
   subjects: SubjectRecord[];
   keyframes: Array<{ id: string; timestamp: number; image_url: string }>;

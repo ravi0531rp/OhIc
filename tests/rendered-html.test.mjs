@@ -18,8 +18,9 @@ test("server-renders the OhIc workspace", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
   assert.match(html, /<title>OhIc — AI video enhancement<\/title>/i);
-  assert.match(html, /Make old video/);
-  assert.match(html, /Upscale individual videos/);
+  assert.match(html, /Restore\. Search\./);
+  assert.match(html, /Multimodal RAG/);
+  assert.match(html, /Phone camera/);
   assert.doesNotMatch(html, /Apple|M3 Pro|your Mac|this Mac/i);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/);
 });

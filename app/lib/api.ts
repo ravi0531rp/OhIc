@@ -19,6 +19,7 @@ import type {
   IdentityRecord,
   ProStatus,
   VideoAnalysis,
+  CameraSession,
 } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -40,6 +41,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<Health>("/api/health"),
+  createCameraSession: () => request<CameraSession>("/api/camera/sessions", { method: "POST" }),
+  cameraSession: (id: string) => request<CameraSession>(`/api/camera/sessions/${id}`),
+  cancelCameraSession: (id: string) => request<CameraSession>(`/api/camera/sessions/${id}/cancel`, { method: "POST" }),
   models: () => request<EnhancementModel[]>("/api/models"),
   history: () => request<JobRecord[]>("/api/jobs"),
   job: (id: string) => request<JobRecord>(`/api/jobs/${id}`),
@@ -183,11 +187,18 @@ export const api = {
   videoAnalysis: (videoId: string) =>
     request<VideoAnalysis | null>(`/api/pro/videos/${videoId}/analysis`),
   analysis: (id: string) => request<VideoAnalysis>(`/api/pro/analyses/${id}`),
-  createAnalysis: (videoId: string) =>
+  createAnalysis: (input: {
+    video_id: string;
+    transcribe?: boolean;
+    track_people?: boolean;
+    track_objects?: boolean;
+    transcript_language?: string;
+    transcription_engine?: "whisper_multilingual" | "tara_hinglish";
+  }) =>
     request<VideoAnalysis>("/api/pro/analyses", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ video_id: videoId, transcribe: true, track_people: true }),
+      body: JSON.stringify(input),
     }),
   cancelAnalysis: (id: string) =>
     request<VideoAnalysis>(`/api/pro/analyses/${id}/cancel`, { method: "POST" }),
@@ -200,7 +211,7 @@ export const api = {
     }),
   chatHistory: (analysisId: string) =>
     request<ChatSession | null>(`/api/pro/analyses/${analysisId}/chat`),
-  askVideo: (analysisId: string, input: { question: string; session_id?: string; current_time?: number }) =>
+  askVideo: (analysisId: string, input: { question: string; session_id?: string; current_time?: number; retrieval_sources?: Array<"transcript" | "visual"> }) =>
     request<{ session: ChatSession; message: ChatSession["messages"][number] }>(
       `/api/pro/analyses/${analysisId}/chat`,
       {

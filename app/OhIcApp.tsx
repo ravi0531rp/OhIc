@@ -42,6 +42,18 @@ const FALLBACK_MODELS: EnhancementModel[] = [{
   experimental: false,
   temporal: false,
   supports_stream: true,
+}, {
+  identifier: "resize-lanczos",
+  display_name: "Precision resize",
+  scale_factors: [1],
+  supported_devices: ["cpu"],
+  weights: [],
+  license: "MIT",
+  source_url: "https://pillow.readthedocs.io/",
+  description: "Fast Lanczos downsize without generated detail",
+  experimental: false,
+  temporal: false,
+  supports_stream: true,
 }];
 
 type SourceDestination = "enhancement" | "pro";
@@ -423,7 +435,7 @@ export function OhIcApp() {
   if (comparison && video) {
     return (
       <div className="app-shell">
-        <ComparisonViewer job={comparison} video={video} onBack={() => setComparison(null)} onAnother={reset} onPlaylists={() => { setPlaylistsOpen(true); void refreshPlaylists(); }} />
+        <ComparisonViewer job={comparison} video={video} onBack={() => setComparison(null)} onAnother={reset} onOpenPro={() => { setComparison(null); setProOpen(true); }} onPlaylists={() => { setPlaylistsOpen(true); void refreshPlaylists(); }} />
         <PlaylistDrawer playlists={playlists} open={playlistsOpen} onClose={() => setPlaylistsOpen(false)} onCancel={(selected) => void cancelPlaylist(selected)} onDelete={(selected) => void deletePlaylist(selected)} onOpenResult={(id) => void openPlaylistResult(id)} />
         {error && <ErrorToast message={error} onClose={() => setError(null)} />}
       </div>
@@ -459,6 +471,7 @@ export function OhIcApp() {
           video={video}
           onClose={() => setProOpen(false)}
           onChooseSource={chooseProSource}
+          onEnhance={() => setProOpen(false)}
           onSelectAnalysis={(analysis) => void openProAnalysis(analysis)}
           onError={setError}
         />
@@ -467,25 +480,26 @@ export function OhIcApp() {
           <div className="ambient ambient-one" />
           <div className="ambient ambient-two" />
           <section className="hero-copy">
-            <span className="hero-kicker"><SparkIcon size={15} /> AI video enhancement</span>
-            <h1>Make old video<br /><em>look new again.</em></h1>
-            <p>Upscale individual videos, selected ranges, or entire playlists—and watch results as they are produced.</p>
+            <span className="hero-kicker"><SparkIcon size={15} /> Private local video studio</span>
+            <h1>Restore. Search.<br /><em>Understand video.</em></h1>
+            <p>Enhance difficult footage, shrink oversized exports, track subjects, search speech and frames, or capture a nearby phone camera—all on your computer.</p>
+            <div className="studio-capabilities"><span><strong>Restore</strong><small>Spatial + temporal AI</small></span><span><strong>Understand</strong><small>Multimodal RAG</small></span><span><strong>Capture</strong><small>Wi-Fi phone camera</small></span><span><strong>Organize</strong><small>Batch + playlists</small></span></div>
           </section>
           <SourcePicker onLoaded={sourceLoaded} onPlaylistStarted={(started) => { setPlaylists((current) => [started, ...current.filter((item) => item.id !== started.id)]); setPlaylistsOpen(true); setError(null); }} onBatchStarted={(started) => { setBatches((current) => [started, ...current.filter((item) => item.id !== started.id)]); setBatchesOpen(true); setError(null); }} onError={setError} />
           <div className="trust-row">
-            <span>Real-ESRGAN ×2</span>
-            <span>On-device processing</span>
-            <span>No account required</span>
+            <span>Restoration + downsize</span>
+            <span>Multilingual intelligence</span>
+            <span>Local-first · no account</span>
           </div>
         </main>
       ) : (
         <div className="workspace-wrap">
           <div className="workspace-topline">
             <button onClick={reset}>← New video</button>
-            <span>{video.source_type === "youtube" ? "YouTube source" : "Uploaded source"}</span>
+            <span>{video.source_type === "youtube" ? "YouTube source" : video.source_type === "camera" ? "Phone camera source" : "Uploaded source"}</span>
           </div>
           {job && !["complete", "failed", "cancelled"].includes(job.status) && <ProgressPanel job={job} onCancel={() => void cancel()} onPause={() => void pause()} onResume={() => void resume()} />}
-          <EnhancementWorkspace key={`${video.id}:${job?.id ?? "new"}`} video={video} models={models} initialJob={job} busy={busy} onRun={(...args) => void runJob(...args)} onMultiPreview={(...args) => void runMultiPreview(...args)} />
+          <EnhancementWorkspace key={`${video.id}:${job?.id ?? "new"}`} video={video} models={models} initialJob={job} busy={busy} onOpenPro={() => setProOpen(true)} onRun={(...args) => void runJob(...args)} onMultiPreview={(...args) => void runMultiPreview(...args)} />
         </div>
       )}
 

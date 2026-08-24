@@ -3,11 +3,13 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useRef, useState } from "react";
+import QRCode from "qrcode";
 import { api, API_URL } from "../lib/api";
 import type {
   PlaylistMetadata,
   PlaylistRecord,
   BatchRecord,
+  CameraSession,
   PresetRecord,
   QualityPreset,
   VideoRecord,
@@ -15,7 +17,7 @@ import type {
   YouTubeMetadata,
   YouTubeReliabilityReport,
 } from "../lib/types";
-import { LinkIcon, ShieldIcon, UploadIcon } from "./Icons";
+import { FilmIcon, LinkIcon, ShieldIcon, UploadIcon } from "./Icons";
 
 type Props = {
   onLoaded: (video: VideoRecord) => void;
@@ -25,7 +27,7 @@ type Props = {
 };
 
 export function SourcePicker({ onLoaded, onPlaylistStarted, onBatchStarted, onError }: Props) {
-  const [tab, setTab] = useState<"upload" | "youtube">("upload");
+  const [tab, setTab] = useState<"upload" | "youtube" | "camera">("upload");
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [url, setUrl] = useState("");
@@ -39,6 +41,9 @@ export function SourcePicker({ onLoaded, onPlaylistStarted, onBatchStarted, onEr
   const [reliabilityOpen, setReliabilityOpen] = useState(false);
   const [presets, setPresets] = useState<PresetRecord[]>([]);
   const [batchPreset, setBatchPreset] = useState("balanced");
+  const [camera, setCamera] = useState<CameraSession | null>(null);
+  const [cameraQr, setCameraQr] = useState("");
+  const [frameTick, setFrameTick] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const eventsRef = useRef<EventSource | null>(null);
 
@@ -48,6 +53,44 @@ export function SourcePicker({ onLoaded, onPlaylistStarted, onBatchStarted, onEr
     if (tab !== "youtube" || reliability) return;
     void api.youtubeReliability().then(setReliability).catch(() => undefined);
   }, [reliability, tab]);
+  useEffect(() => {
+    if (!camera || ["complete", "cancelled", "failed"].includes(camera.status)) return;
+    const timer = window.setInterval(() => {
+      void api.cameraSession(camera.id).then((next) => {
+        setCamera(next);
+        if (next.status === "streaming") setFrameTick(Date.now());
+        if (next.status === "complete" && next.video) onLoaded(next.video);
+        if (next.status === "failed") onError(next.error ?? "Phone camera capture failed.");
+      }).catch(() => undefined);
+    }, 500);
+    return () => window.clearInterval(timer);
+  }, [camera, onError, onLoaded]);
+
+  const startCamera = async () => {
+    setBusy(true);
+    try {
+      const session = await api.createCameraSession();
+      setCamera(session);
+      setCameraQr(await QRCode.toDataURL(session.pairing_url, {
+        width: 240,
+        margin: 1,
+        color: { dark: "#111510", light: "#efffc4" },
+      }));
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Phone camera pairing failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancelCamera = async () => {
+    if (!camera) return;
+    try {
+      setCamera(await api.cancelCameraSession(camera.id));
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Phone camera pairing could not be cancelled.");
+    }
+  };
 
   const upload = async (selection?: FileList | File[]) => {
     const files = Array.from(selection ?? []);
@@ -178,6 +221,9 @@ export function SourcePicker({ onLoaded, onPlaylistStarted, onBatchStarted, onEr
         <button className={tab === "youtube" ? "active" : ""} onClick={() => setTab("youtube")} role="tab">
           <LinkIcon size={17} /> YouTube
         </button>
+        <button className={tab === "camera" ? "active" : ""} onClick={() => setTab("camera")} role="tab">
+          <FilmIcon size={17} /> Phone camera
+        </button>
       </div>
 
       {tab === "upload" ? (
@@ -210,6 +256,10 @@ export function SourcePicker({ onLoaded, onPlaylistStarted, onBatchStarted, onEr
           </button>
           <label className="batch-upload-options">Batch preset<select disabled={busy} value={batchPreset} onChange={(event) => setBatchPreset(event.target.value)}><option value="balanced">Recommended targets · Balanced</option><option value="fast">Recommended targets · Fast</option><option value="maximum">Recommended targets · Maximum</option>{presets.map((preset) => <option value={preset.id} key={preset.id}>{preset.name}</option>)}</select></label>
         </>
+      ) : tab === "camera" ? (
+        <div className="camera-pairing-pane">
+          {!camera ? <div className="camera-pairing-empty"><span className="drop-icon"><FilmIcon size={25} /></span><strong>Stream from a phone on this Wi-Fi</strong><p>OhIc creates a one-time local pairing page. Scan its QR code, allow the rear camera, and the live capture becomes a normal source video.</p><button disabled={busy} onClick={() => void startCamera()}>{busy ? "Opening pairing…" : "Create camera pairing"}</button></div> : <div className="camera-pairing-live"><div className="camera-qr">{cameraQr && <img src={cameraQr} alt="QR code for phone camera pairing" />}</div><div className="camera-pairing-copy"><span className="eyebrow">{camera.status === "waiting" ? "Waiting for phone" : camera.status === "streaming" ? "Camera live" : camera.status === "processing" ? "Creating video" : camera.status}</span><h3>{camera.status === "waiting" ? "Scan with your phone" : camera.status === "streaming" ? `${camera.frame_count} frames received` : "Finishing the capture…"}</h3><p>Both devices must be on the same network. Mobile browsers require a trusted HTTPS origin for live camera access; the phone page explains this if the network origin is not trusted.</p><code>{camera.pairing_url}</code>{camera.status === "streaming" && <img className="camera-live-preview" src={`${API_URL}/api/camera/sessions/${camera.id}/frame?t=${frameTick}`} alt="Live phone camera preview" />}{!["complete", "cancelled", "failed"].includes(camera.status) && <button className="camera-cancel" onClick={() => void cancelCamera()}>Cancel pairing</button>}</div></div>}
+        </div>
       ) : (
         <div className="youtube-pane">
           {!youtube && !playlist ? (
