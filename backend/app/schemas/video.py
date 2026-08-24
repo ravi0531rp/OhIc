@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 class SourceType(StrEnum):
     UPLOAD = "upload"
     YOUTUBE = "youtube"
+    CAMERA = "camera"
 
 
 class MediaTrack(BaseModel):
@@ -83,6 +84,25 @@ class VideoRecord(BaseModel):
     thumbnail: str | None = None
     uploader: str | None = None
     diagnosis: SourceDiagnosis | None = None
+
+
+class CameraSessionStatus(StrEnum):
+    WAITING = "waiting"
+    STREAMING = "streaming"
+    PROCESSING = "processing"
+    COMPLETE = "complete"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+
+
+class CameraSession(BaseModel):
+    id: str
+    status: CameraSessionStatus = CameraSessionStatus.WAITING
+    pairing_url: str
+    frame_count: int = 0
+    created_at: datetime
+    video: VideoRecord | None = None
+    error: str | None = None
 
 
 class YouTubeInspectRequest(BaseModel):

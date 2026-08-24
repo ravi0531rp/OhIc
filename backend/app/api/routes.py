@@ -1,11 +1,12 @@
 import asyncio
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
 from app.api.dependencies import (
     get_batch_manager,
+    get_camera_manager,
     get_comparison_manager,
     get_database,
     get_intelligence_manager,
@@ -45,6 +46,7 @@ from app.schemas.playlist import (
 from app.schemas.storage import StorageCleanupRequest, StorageCleanupResult, StorageItem
 from app.schemas.system import HealthResponse, ResourceSnapshot
 from app.schemas.video import (
+    CameraSession,
     VideoRecord,
     YouTubeDownloadRecord,
     YouTubeDownloadRequest,
@@ -60,6 +62,35 @@ from app.utils.files import ensure_within
 from app.video.probe import VideoProbeError
 
 router = APIRouter(prefix="/api")
+
+
+@router.post("/camera/sessions", response_model=CameraSession, status_code=201)
+def create_camera_session() -> CameraSession:
+    return get_camera_manager().create()
+
+
+@router.get("/camera/sessions/{session_id}", response_model=CameraSession)
+def get_camera_session(session_id: str) -> CameraSession:
+    session = get_camera_manager().get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Camera session not found.")
+    return session
+
+
+@router.get("/camera/sessions/{session_id}/frame")
+def camera_session_frame(session_id: str) -> Response:
+    frame = get_camera_manager().latest_frame(session_id)
+    if not frame:
+        return Response(status_code=204)
+    return Response(frame, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@router.post("/camera/sessions/{session_id}/cancel", response_model=CameraSession)
+def cancel_camera_session(session_id: str) -> CameraSession:
+    try:
+        return get_camera_manager().cancel(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/pro/status", response_model=ProStatus)

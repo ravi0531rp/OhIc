@@ -84,6 +84,24 @@ class VideoService:
         self.database.save_video(record)
         return record
 
+    def register_camera_capture(self, path: Path) -> VideoRecord:
+        video_id = path.stem
+        metadata = probe_video(path)
+        record = VideoRecord(
+            id=video_id,
+            source_type=SourceType.CAMERA,
+            original_name=f"Phone camera {video_id[:8]}.mp4",
+            path=str(path),
+            metadata=metadata,
+            targets=recommend_targets(metadata),
+            diagnosis=diagnose_source(metadata),
+            created_at=datetime.now(UTC),
+            playback_url=f"/api/videos/{video_id}/media",
+            title="Phone camera capture",
+        )
+        self.database.save_video(record)
+        return record
+
     def ensure_diagnosis(self, record: VideoRecord) -> VideoRecord:
         if record.diagnosis:
             return record

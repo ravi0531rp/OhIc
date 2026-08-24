@@ -5,6 +5,7 @@ from app.inference.registry import ModelRegistry
 from app.jobs.manager import JobManager
 from app.models.database import Database
 from app.services.batches import BatchManager
+from app.services.camera import CameraSessionManager
 from app.services.comparisons import ComparisonManager
 from app.services.intelligence import IntelligenceManager
 from app.services.playlists import PlaylistManager
@@ -29,6 +30,11 @@ def get_registry() -> ModelRegistry:
 @lru_cache
 def get_video_service() -> VideoService:
     return VideoService(get_settings(), get_database())
+
+
+@lru_cache
+def get_camera_manager() -> CameraSessionManager:
+    return CameraSessionManager(get_settings(), get_video_service())
 
 
 @lru_cache
