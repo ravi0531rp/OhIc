@@ -45,7 +45,6 @@ export function ProIntelligenceWorkspace({
   const [transcriptionEngine, setTranscriptionEngine] = useState<"whisper_multilingual" | "tara_hinglish">("whisper_multilingual");
   const [transcriptLanguage, setTranscriptLanguage] = useState("");
   const [trackObjects, setTrackObjects] = useState(true);
-  const [retrievalSources, setRetrievalSources] = useState<Array<"transcript" | "visual">>(["transcript", "visual"]);
   const player = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
@@ -72,6 +71,8 @@ export function ProIntelligenceWorkspace({
       setAnalysis(record);
       if (record?.status === "ready") {
         void api.chatHistory(record.id).then(setSession).catch(() => undefined);
+      } else {
+        setSession(null);
       }
     }).catch((error) => onError(error instanceof Error ? error.message : "Analysis could not load."));
   }, [onError, video]);
@@ -161,7 +162,6 @@ export function ProIntelligenceWorkspace({
         question: value,
         session_id: session?.id === "pending" ? undefined : session?.id,
         current_time: currentTime,
-        retrieval_sources: retrievalSources,
       });
       setSession(response.session);
     } catch (error) {
@@ -273,7 +273,7 @@ export function ProIntelligenceWorkspace({
           </section>
           <aside className="pro-dock">
             <div className="pro-tabs">{(["ask", "subjects", "transcript"] as const).map((value) => <button key={value} className={tab === value ? "active" : ""} onClick={() => setTab(value)}>{value === "ask" ? "Ask" : value === "subjects" ? `Subjects ${analysis.subjects.length}` : "Transcript"}</button>)}</div>
-            {tab === "ask" && <AskPanel session={session} question={question} asking={asking} retrievalSources={retrievalSources} onRetrievalSources={setRetrievalSources} onQuestion={setQuestion} onSubmit={ask} onSeek={seek} />}
+            {tab === "ask" && <AskPanel session={session} question={question} asking={asking} onQuestion={setQuestion} onSubmit={ask} onSeek={seek} />}
             {tab === "subjects" && <SubjectsPanel subjects={analysis.subjects} identities={identities} names={names} onName={(id, value) => setNames((current) => ({ ...current, [id]: value }))} onTag={tag} onSeek={seek} />}
             {tab === "transcript" && <TranscriptPanel segments={transcript} query={transcriptQuery} onQuery={setTranscriptQuery} onSeek={seek} />}
           </aside>
@@ -287,15 +287,8 @@ function ModelLine({ label, value, detail }: { label: string; value: string; det
   return <div><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>;
 }
 
-function AskPanel({ session, question, asking, retrievalSources, onRetrievalSources, onQuestion, onSubmit, onSeek }: { session: ChatSession | null; question: string; asking: boolean; retrievalSources: Array<"transcript" | "visual">; onRetrievalSources: (value: Array<"transcript" | "visual">) => void; onQuestion: (value: string) => void; onSubmit: (event: FormEvent) => void; onSeek: (time: number) => void }) {
-  const toggleSource = (source: "transcript" | "visual") => {
-    if (retrievalSources.includes(source)) {
-      if (retrievalSources.length > 1) onRetrievalSources(retrievalSources.filter((value) => value !== source));
-    } else {
-      onRetrievalSources([...retrievalSources, source]);
-    }
-  };
-  return <div className="pro-panel ask-panel"><div className="chat-scroll">{!session?.messages.length && <div className="chat-welcome"><SparkIcon size={24} /><h3>Ask this video</h3><p>Try “What is explained at 12:30?”, “When does Alex appear?”, or “Summarize the opening.” Every answer is grounded in local timestamps.</p></div>}{session?.messages.map((message) => <article key={message.id} className={`chat-message ${message.role}`}><span>{message.role === "assistant" ? "OhIc" : "You"}</span><p>{message.content}</p>{message.citations.length > 0 && <div className="citation-row">{message.citations.map((citation, index) => <button key={`${citation.kind}-${citation.start}-${index}`} onClick={() => onSeek(citation.start)}>{citation.label}</button>)}</div>}{message.tool_calls.length > 0 && <details><summary>{message.tool_calls.length} local tools used</summary>{message.tool_calls.map((tool) => <small key={tool.name}>{tool.name} · {tool.result_count} results</small>)}</details>}</article>)}{asking && <div className="chat-thinking"><i /><i /><i /> Inspecting local evidence</div>}</div><form className="chat-composer" onSubmit={onSubmit}><div className="rag-source-picker"><span>Search over</span><button type="button" className={retrievalSources.includes("transcript") ? "active" : ""} onClick={() => toggleSource("transcript")}>Transcript embeddings</button><button type="button" className={retrievalSources.includes("visual") ? "active" : ""} onClick={() => toggleSource("visual")}>Video embeddings</button></div><textarea value={question} onChange={(event) => onQuestion(event.target.value)} placeholder="Ask about a moment, person, or idea…" rows={3} /><button className="pro-primary" disabled={!question.trim() || asking}>Ask locally</button></form></div>;
+function AskPanel({ session, question, asking, onQuestion, onSubmit, onSeek }: { session: ChatSession | null; question: string; asking: boolean; onQuestion: (value: string) => void; onSubmit: (event: FormEvent) => void; onSeek: (time: number) => void }) {
+  return <div className="pro-panel ask-panel"><div className="chat-scroll">{!session?.messages.length && <div className="chat-welcome"><SparkIcon size={24} /><h3>Ask this video</h3><p>Try “What is explained at 12:30?”, “When does Alex appear?”, or “Summarize the opening.” Every answer searches both transcript and video evidence and remembers this conversation.</p></div>}{session?.messages.map((message) => <article key={message.id} className={`chat-message ${message.role}`}><span>{message.role === "assistant" ? "OhIc" : "You"}</span><p>{message.content}</p>{message.citations.length > 0 && <div className="citation-row">{message.citations.map((citation, index) => <button key={`${citation.kind}-${citation.start}-${index}`} onClick={() => onSeek(citation.start)}>{citation.label}</button>)}</div>}{message.tool_calls.length > 0 && <details><summary>{message.tool_calls.length} local tools used</summary>{message.tool_calls.map((tool) => <small key={tool.name}>{tool.name} · {tool.result_count} results</small>)}</details>}</article>)}{asking && <div className="chat-thinking"><i /><i /><i /> Inspecting transcript and video evidence</div>}</div><form className="chat-composer" onSubmit={onSubmit}><textarea value={question} onChange={(event) => onQuestion(event.target.value)} placeholder="Ask about a moment, person, or idea…" rows={3} /><button className="pro-primary" disabled={!question.trim() || asking}>Ask locally</button></form></div>;
 }
 
 function SubjectsPanel({ subjects, identities, names, onName, onTag, onSeek }: { subjects: SubjectRecord[]; identities: IdentityRecord[]; names: Record<string, string>; onName: (id: string, value: string) => void; onTag: (subject: SubjectRecord, identityId?: string) => void; onSeek: (time: number) => void }) {

@@ -249,13 +249,21 @@ class IntelligenceManager:
         analysis = self.database.get_analysis(analysis_id)
         if not analysis or analysis.status != AnalysisStatus.READY:
             raise ValueError("Finish analyzing this video before asking questions.")
-        session = self.database.get_chat_session(request.session_id) if request.session_id else None
+        session = (
+            self.database.get_chat_session(request.session_id)
+            if request.session_id
+            else self.database.latest_chat_for_analysis(analysis_id)
+        )
         if session and session.analysis_id != analysis_id:
             raise ValueError("This chat belongs to another video.")
         session = session or ChatSession(analysis_id=analysis_id)
+        history = session.messages[-8:]
         user_message = ChatMessage(role="user", content=request.question.strip())
-        tools, citations, image_paths, evidence = self._collect_evidence(analysis, request)
-        prompt = self._answer_prompt(analysis, request.question, evidence)
+        retrieval_query = self._contextual_query(request.question, history)
+        tools, citations, image_paths, evidence = self._collect_evidence(
+            analysis, request, retrieval_query
+        )
+        prompt = self._answer_prompt(analysis, request.question, evidence, history)
         answer = self._runtime.answer(prompt, image_paths)
         if not answer:
             answer = "I could not find enough local evidence to answer that confidently."
@@ -860,7 +868,7 @@ class IntelligenceManager:
         return self._analysis_dir(analysis_id) / "embeddings.json"
 
     def _collect_evidence(
-        self, analysis: VideoAnalysis, request: ChatRequest
+        self, analysis: VideoAnalysis, request: ChatRequest, retrieval_query: str | None = None
     ) -> tuple[list[ToolExecution], list[EvidenceCitation], list[Path], list[str]]:
         tools = [ToolExecution(name="video_metadata", result_count=1)]
         video = self.database.get_video(analysis.video_id)
@@ -872,42 +880,33 @@ class IntelligenceManager:
                 f"size={video.metadata.width}x{video.metadata.height}, "
                 f"title={video.title or video.original_name}"
             )
-        query_terms = self._query_terms(request.question)
+        query = retrieval_query or request.question
+        query_terms = self._query_terms(query)
         ranked = []
-        transcript_scores = (
-            self._embedding_scores(analysis, request.question, "transcript")
-            if "transcript" in request.retrieval_sources
-            else {}
-        )
-        if "transcript" in request.retrieval_sources:
-            for segment in analysis.transcript_segments:
-                text_terms = self._query_terms(segment.text)
-                overlap = len(query_terms & text_terms)
-                proximity = 0.0
-                if request.current_time is not None:
-                    proximity = 1 / (1 + abs(segment.start - request.current_time))
-                ranked.append(
-                    (overlap * 10 + transcript_scores.get(segment.id, 0) * 4 + proximity, segment)
-                )
+        transcript_scores = self._embedding_scores(analysis, query, "transcript")
+        for segment in analysis.transcript_segments:
+            text_terms = self._query_terms(segment.text)
+            overlap = len(query_terms & text_terms)
+            proximity = 0.0
+            if request.current_time is not None:
+                proximity = 1 / (1 + abs(segment.start - request.current_time))
+            ranked.append(
+                (overlap * 10 + transcript_scores.get(segment.id, 0) * 4 + proximity, segment)
+            )
         selected_segments = [
             item
             for score, item in sorted(ranked, key=lambda item: item[0], reverse=True)[:6]
             if score > 0
         ]
-        if (
-            "transcript" in request.retrieval_sources
-            and not selected_segments
-            and analysis.transcript_segments
-        ):
+        if not selected_segments and analysis.transcript_segments:
             selected_segments = analysis.transcript_segments[:4]
-        if "transcript" in request.retrieval_sources:
-            tools.append(
-                ToolExecution(
-                    name="search_transcript_embeddings",
-                    arguments={"query": request.question, "limit": 6},
-                    result_count=len(selected_segments),
-                )
+        tools.append(
+            ToolExecution(
+                name="search_transcript_embeddings",
+                arguments={"query": query, "limit": 6},
+                result_count=len(selected_segments),
             )
+        )
         for segment in selected_segments:
             label = f"{self._clock(segment.start)}–{self._clock(segment.end)}"
             evidence.append(f"[transcript {label}] {segment.text}")
@@ -929,16 +928,15 @@ class IntelligenceManager:
                 )
             )
         subject_matches = []
-        lower = request.question.lower()
-        for subject in analysis.subjects if "visual" in request.retrieval_sources else []:
+        lower = query.lower()
+        for subject in analysis.subjects:
             if any(
                 word in lower
                 for word in ("person", "people", "who", "subject", subject.label.lower())
             ):
                 subject_matches.append(subject)
-        if "visual" in request.retrieval_sources and (
-            subject_matches
-            or any(word in lower for word in ("person", "people", "who", "subject"))
+        if subject_matches or any(
+            word in lower for word in ("person", "people", "who", "subject")
         ):
             tools.append(ToolExecution(name="list_subjects", result_count=len(analysis.subjects)))
             for subject in (subject_matches or analysis.subjects)[:8]:
@@ -963,23 +961,15 @@ class IntelligenceManager:
         target_times.extend(segment.start for segment in selected_segments[:3])
         if request.current_time is not None:
             target_times.insert(0, request.current_time)
-        visual_scores = (
-            self._embedding_scores(analysis, request.question, "visual")
-            if "visual" in request.retrieval_sources
-            else {}
-        )
-        semantic_frames = (
-            sorted(
-                analysis.keyframes,
-                key=lambda item: visual_scores.get(item.id, -1),
-                reverse=True,
-            )[:4]
-            if "visual" in request.retrieval_sources
-            else []
-        )
+        visual_scores = self._embedding_scores(analysis, query, "visual")
+        semantic_frames = sorted(
+            analysis.keyframes,
+            key=lambda item: visual_scores.get(item.id, -1),
+            reverse=True,
+        )[:4]
         selected_frames: list[KeyframeRecord] = []
         for target in target_times:
-            if analysis.keyframes and "visual" in request.retrieval_sources:
+            if analysis.keyframes:
                 frame = min(analysis.keyframes, key=lambda item: abs(item.timestamp - target))
                 if frame.id not in {item.id for item in selected_frames}:
                     selected_frames.append(frame)
@@ -987,16 +977,16 @@ class IntelligenceManager:
             if frame.id not in {item.id for item in selected_frames}:
                 selected_frames.append(frame)
         selected_frames = selected_frames[:4]
-        if "visual" in request.retrieval_sources:
-            tools.append(
-                ToolExecution(
-                    name="search_video_embeddings",
-                    arguments={
-                        "timestamps": [round(item.timestamp, 2) for item in selected_frames]
-                    },
-                    result_count=len(selected_frames),
-                )
+        tools.append(
+            ToolExecution(
+                name="search_video_embeddings",
+                arguments={
+                    "query": query,
+                    "timestamps": [round(item.timestamp, 2) for item in selected_frames],
+                },
+                result_count=len(selected_frames),
             )
+        )
         image_paths = []
         for frame in selected_frames:
             path = self._frame_path(analysis, frame)
@@ -1019,13 +1009,34 @@ class IntelligenceManager:
         unique = {(item.kind, round(item.start, 2), item.label): item for item in citations}
         return tools, list(unique.values())[:10], image_paths, evidence
 
-    def _answer_prompt(self, analysis: VideoAnalysis, question: str, evidence: list[str]) -> str:
+    @staticmethod
+    def _contextual_query(question: str, history: list[ChatMessage]) -> str:
+        if not history:
+            return question.strip()
+        context = "\n".join(
+            f"{message.role}: {message.content}" for message in history[-4:]
+        )
+        return f"{context}\nuser follow-up: {question.strip()}"[-4000:]
+
+    def _answer_prompt(
+        self,
+        analysis: VideoAnalysis,
+        question: str,
+        evidence: list[str],
+        history: list[ChatMessage] | None = None,
+    ) -> str:
+        conversation = "\n".join(
+            f"{message.role.title()}: {message.content}" for message in (history or [])[-8:]
+        )
         return (
             "You are OhIc's private, local video analyst. Answer only from the supplied "
             "local evidence. Never invent a person identity, dialogue, or off-screen event. "
+            "Resolve follow-up references from the conversation history. "
             "If evidence is insufficient, say so. "
             "Use concise prose and mention relevant timestamps exactly as written.\n\n"
-            f"Question: {question}\n\nEvidence for analysis {analysis.id}:\n" + "\n".join(evidence)
+            f"Conversation history:\n{conversation or '(new conversation)'}\n\n"
+            f"Current question: {question}\n\nEvidence for analysis {analysis.id}:\n"
+            + "\n".join(evidence)
         )
 
     def _write_vtt(self, analysis: VideoAnalysis) -> None:

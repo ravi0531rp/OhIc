@@ -174,9 +174,6 @@ class ChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     session_id: str | None = None
     current_time: float | None = Field(default=None, ge=0)
-    retrieval_sources: set[Literal["transcript", "visual"]] = Field(
-        default_factory=lambda: {"transcript", "visual"}, min_length=1
-    )
 
 
 class ChatResponse(BaseModel):
