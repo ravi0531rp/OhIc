@@ -84,7 +84,9 @@ class VideoService:
         self.database.save_video(record)
         return record
 
-    def register_camera_capture(self, path: Path) -> VideoRecord:
+    def register_camera_capture(
+        self, path: Path, title: str = "Phone camera capture"
+    ) -> VideoRecord:
         video_id = path.stem
         metadata = probe_video(path)
         record = VideoRecord(
@@ -97,7 +99,7 @@ class VideoService:
             diagnosis=diagnose_source(metadata),
             created_at=datetime.now(UTC),
             playback_url=f"/api/videos/{video_id}/media",
-            title="Phone camera capture",
+            title=title,
         )
         self.database.save_video(record)
         return record

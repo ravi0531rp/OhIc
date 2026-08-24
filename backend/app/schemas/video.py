@@ -95,11 +95,22 @@ class CameraSessionStatus(StrEnum):
     FAILED = "failed"
 
 
+class CameraStreamMode(StrEnum):
+    FRAMES = "frames"
+    MEDIA = "media"
+
+
 class CameraSession(BaseModel):
     id: str
     status: CameraSessionStatus = CameraSessionStatus.WAITING
     pairing_url: str
     frame_count: int = 0
+    segment_count: int = 0
+    stream_bytes: int = 0
+    ready_seconds: float = 0
+    stream_mode: CameraStreamMode | None = None
+    stream_mime_type: str | None = None
+    checkpoint_count: int = 0
     created_at: datetime
     video: VideoRecord | None = None
     error: str | None = None

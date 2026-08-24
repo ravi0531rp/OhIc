@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
     frontend_origin: str = "http://localhost:3000"
+    camera_port: int = Field(default=0, ge=0, le=65535)
+    camera_pairing_base_url: str | None = None
     data_dir: Path = Field(default_factory=lambda: Path(__file__).parents[3] / "data")
     model_dir: Path | None = None
     max_upload_gb: float = 20.0
