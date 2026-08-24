@@ -428,11 +428,11 @@ export function OhIcApp() {
     setProOpen(false);
   };
 
-  const sourceLoaded = (source: VideoRecord) => {
+  const sourceLoaded = (source: VideoRecord, destination = sourceDestination) => {
     setVideo(source);
     setError(null);
     void refreshHistory();
-    if (sourceDestination === "pro") {
+    if (destination === "pro") {
       setProOpen(true);
       setSourceDestination("enhancement");
     }
@@ -521,7 +521,7 @@ export function OhIcApp() {
             <p>Enhance difficult footage, shrink oversized exports, track subjects, search speech and frames, or capture a nearby phone camera—all on your computer.</p>
             <div className="studio-capabilities"><span><strong>Restore</strong><small>Spatial + temporal AI</small></span><span><strong>Understand</strong><small>Multimodal RAG</small></span><span><strong>Capture</strong><small>Wi-Fi phone camera</small></span><span><strong>Organize</strong><small>Batch + playlists</small></span></div>
           </section>
-          <SourcePicker onLoaded={sourceLoaded} onPlaylistStarted={(started) => { setPlaylists((current) => [started, ...current.filter((item) => item.id !== started.id)]); setPlaylistsOpen(true); setError(null); }} onBatchStarted={(started) => { setBatches((current) => [started, ...current.filter((item) => item.id !== started.id)]); setBatchesOpen(true); setError(null); }} onError={setError} />
+          <SourcePicker onLoaded={sourceLoaded} onCameraCheckpoint={sourceLoaded} onPlaylistStarted={(started) => { setPlaylists((current) => [started, ...current.filter((item) => item.id !== started.id)]); setPlaylistsOpen(true); setError(null); }} onBatchStarted={(started) => { setBatches((current) => [started, ...current.filter((item) => item.id !== started.id)]); setBatchesOpen(true); setError(null); }} onError={setError} />
           <div className="trust-row">
             <span>Restoration + downsize</span>
             <span>Multilingual intelligence</span>

@@ -219,6 +219,12 @@ export type CameraSession = {
   status: "waiting" | "streaming" | "processing" | "complete" | "cancelled" | "failed";
   pairing_url: string;
   frame_count: number;
+  segment_count: number;
+  stream_bytes: number;
+  ready_seconds: number;
+  stream_mode?: "frames" | "media";
+  stream_mime_type?: string;
+  checkpoint_count: number;
   created_at: string;
   video?: VideoRecord;
   error?: string;

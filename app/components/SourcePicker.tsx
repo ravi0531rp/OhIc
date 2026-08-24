@@ -21,12 +21,13 @@ import { FilmIcon, LinkIcon, ShieldIcon, UploadIcon } from "./Icons";
 
 type Props = {
   onLoaded: (video: VideoRecord) => void;
+  onCameraCheckpoint: (video: VideoRecord, destination: "enhancement" | "pro") => void;
   onPlaylistStarted: (playlist: PlaylistRecord) => void;
   onBatchStarted: (batch: BatchRecord) => void;
   onError: (message: string) => void;
 };
 
-export function SourcePicker({ onLoaded, onPlaylistStarted, onBatchStarted, onError }: Props) {
+export function SourcePicker({ onLoaded, onCameraCheckpoint, onPlaylistStarted, onBatchStarted, onError }: Props) {
   const [tab, setTab] = useState<"upload" | "youtube" | "camera">("upload");
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -44,6 +45,7 @@ export function SourcePicker({ onLoaded, onPlaylistStarted, onBatchStarted, onEr
   const [camera, setCamera] = useState<CameraSession | null>(null);
   const [cameraQr, setCameraQr] = useState("");
   const [frameTick, setFrameTick] = useState(0);
+  const [cameraCheckpointing, setCameraCheckpointing] = useState<"enhancement" | "pro" | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const eventsRef = useRef<EventSource | null>(null);
 
@@ -89,6 +91,18 @@ export function SourcePicker({ onLoaded, onPlaylistStarted, onBatchStarted, onEr
       setCamera(await api.cancelCameraSession(camera.id));
     } catch (error) {
       onError(error instanceof Error ? error.message : "Phone camera pairing could not be cancelled.");
+    }
+  };
+
+  const openCameraCheckpoint = async (destination: "enhancement" | "pro") => {
+    if (!camera) return;
+    setCameraCheckpointing(destination);
+    try {
+      onCameraCheckpoint(await api.checkpointCameraSession(camera.id), destination);
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "The live camera buffer is not ready yet.");
+    } finally {
+      setCameraCheckpointing(null);
     }
   };
 
@@ -258,7 +272,7 @@ export function SourcePicker({ onLoaded, onPlaylistStarted, onBatchStarted, onEr
         </>
       ) : tab === "camera" ? (
         <div className="camera-pairing-pane">
-          {!camera ? <div className="camera-pairing-empty"><span className="drop-icon"><FilmIcon size={25} /></span><strong>Capture from a phone on this Wi-Fi</strong><p>OhIc creates a one-time local pairing page. Scan its QR code and use the phone&apos;s native camera recorder. Secure browsers can also send a live camera stream.</p><button disabled={busy} onClick={() => void startCamera()}>{busy ? "Opening pairing…" : "Create camera pairing"}</button></div> : <div className="camera-pairing-live"><div className="camera-qr">{cameraQr && <img src={cameraQr} alt="QR code for phone camera pairing" />}</div><div className="camera-pairing-copy"><span className="eyebrow">{camera.status === "waiting" ? "Waiting for phone" : camera.status === "streaming" ? "Camera live" : camera.status === "processing" ? "Creating video" : camera.status}</span><h3>{camera.status === "waiting" ? "Scan with your phone" : camera.status === "streaming" ? `${camera.frame_count} frames received` : "Finishing the capture…"}</h3><p>Both devices must be on the same network. Native phone recording works over local HTTP; live browser streaming is offered when the pairing page has secure camera access.</p><code>{camera.pairing_url}</code>{camera.status === "streaming" && <img className="camera-live-preview" src={`${API_URL}/api/camera/sessions/${camera.id}/frame?t=${frameTick}`} alt="Live phone camera preview" />}{!["complete", "cancelled", "failed"].includes(camera.status) && <button className="camera-cancel" onClick={() => void cancelCamera()}>Cancel pairing</button>}</div></div>}
+          {!camera ? <div className="camera-pairing-empty"><span className="drop-icon"><FilmIcon size={25} /></span><strong>Stream from a phone on this Wi-Fi</strong><p>OhIc creates a one-time local pairing page. Supported browsers send durable video-and-audio chunks; native phone recording remains available as a fallback.</p><button disabled={busy} onClick={() => void startCamera()}>{busy ? "Opening pairing…" : "Create camera pairing"}</button></div> : <CameraPairingPanel camera={camera} cameraQr={cameraQr} frameTick={frameTick} checkpointing={cameraCheckpointing} onCancel={() => void cancelCamera()} onCheckpoint={(destination) => void openCameraCheckpoint(destination)} />}
         </div>
       ) : (
         <div className="youtube-pane">
@@ -382,6 +396,52 @@ export function SourcePicker({ onLoaded, onPlaylistStarted, onBatchStarted, onEr
         </div>
       )}
     </section>
+  );
+}
+
+function CameraPairingPanel({
+  camera,
+  cameraQr,
+  frameTick,
+  checkpointing,
+  onCancel,
+  onCheckpoint,
+}: {
+  camera: CameraSession;
+  cameraQr: string;
+  frameTick: number;
+  checkpointing: "enhancement" | "pro" | null;
+  onCancel: () => void;
+  onCheckpoint: (destination: "enhancement" | "pro") => void;
+}) {
+  const streaming = camera.status === "streaming";
+  const hasBuffer = camera.segment_count > 0 || camera.frame_count >= 2;
+  const statusLabel = camera.status === "waiting"
+    ? "Waiting for phone"
+    : streaming
+      ? camera.stream_mode === "media" ? "Video + audio live" : "Camera preview live"
+      : camera.status === "processing" ? "Creating video" : camera.status;
+  const streamDetail = camera.segment_count > 0
+    ? `${camera.segment_count} durable chunks · ${Math.round(camera.ready_seconds)}s · ${formatBytes(camera.stream_bytes)}`
+    : `${camera.frame_count} preview frames received`;
+  return (
+    <div className="camera-pairing-live">
+      <div className="camera-qr">{cameraQr && <img src={cameraQr} alt="QR code for phone camera pairing" />}</div>
+      <div className="camera-pairing-copy" aria-live="polite">
+        <span className="eyebrow">{statusLabel}</span>
+        <h3>{camera.status === "waiting" ? "Scan with your phone" : streaming ? streamDetail : "Finishing the capture…"}</h3>
+        <p>Each ordered chunk is stored before it is acknowledged. Create an immutable checkpoint at any time, then enhance it or analyze it in Pro while the phone keeps streaming.</p>
+        <code>{camera.pairing_url}</code>
+        {streaming && camera.frame_count > 0 && <img className="camera-live-preview" src={`${API_URL}/api/camera/sessions/${camera.id}/frame?t=${frameTick}`} alt="Live phone camera preview" />}
+        {streaming && hasBuffer && (
+          <div className="camera-live-actions">
+            <button disabled={checkpointing !== null} onClick={() => onCheckpoint("enhancement")}>{checkpointing === "enhancement" ? "Freezing buffer…" : "Enhance current buffer"}</button>
+            <button disabled={checkpointing !== null} onClick={() => onCheckpoint("pro")}>{checkpointing === "pro" ? "Freezing buffer…" : "Analyze current buffer"}</button>
+          </div>
+        )}
+        {!['complete', 'cancelled', 'failed'].includes(camera.status) && <button className="camera-cancel" onClick={onCancel}>Cancel pairing</button>}
+      </div>
+    </div>
   );
 }
 

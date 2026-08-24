@@ -200,6 +200,10 @@ button { color: inherit; }
 .camera-pairing-copy p { color: #757b75; font-size: 9px; line-height: 1.55; }
 .camera-pairing-copy code { color: #939a92; display: block; font-size: 7px; overflow-wrap: anywhere; }
 .camera-live-preview { aspect-ratio: 16/9; background: #050605; border-radius: 9px; display: block; margin-top: 12px; object-fit: contain; width: 100%; }
+.camera-live-actions { display: grid; gap: 7px; grid-template-columns: 1fr 1fr; margin-top: 10px; }
+.camera-live-actions button { background: rgba(217,255,103,.08); border: 1px solid rgba(217,255,103,.28); border-radius: 8px; color: var(--accent); cursor: pointer; font-size: 8px; font-weight: 650; padding: 9px 7px; }
+.camera-live-actions button:last-child { background: var(--accent); color: var(--accent-ink); }
+.camera-live-actions button:disabled { cursor: wait; opacity: .5; }
 .camera-cancel { background: transparent; border: 1px solid var(--line); border-radius: 7px; color: #8b918a; cursor: pointer; font-size: 8px; margin-top: 10px; padding: 8px 10px; }
 .youtube-mode { background: #0f110f; border: 1px solid var(--line); border-radius: 9px; display: inline-flex; margin-bottom: 25px; padding: 3px; }
 .youtube-mode button { background: transparent; border: 0; border-radius: 6px; color: #666b66; cursor: pointer; font-size: 9px; padding: 7px 10px; }

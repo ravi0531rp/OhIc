@@ -45,6 +45,7 @@ export const api = {
   createCameraSession: () => request<CameraSession>("/api/camera/sessions", { method: "POST" }),
   cameraSession: (id: string) => request<CameraSession>(`/api/camera/sessions/${id}`),
   cancelCameraSession: (id: string) => request<CameraSession>(`/api/camera/sessions/${id}/cancel`, { method: "POST" }),
+  checkpointCameraSession: (id: string) => request<VideoRecord>(`/api/camera/sessions/${id}/checkpoint`, { method: "POST" }),
   models: () => request<EnhancementModel[]>("/api/models"),
   history: () => request<HistoryEntry[]>("/api/history"),
   job: (id: string) => request<JobRecord>(`/api/jobs/${id}`),
