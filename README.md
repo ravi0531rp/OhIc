@@ -14,6 +14,29 @@ code, integrating the API, or tuning its configuration, see the
 ## Interface preview
 
 <p align="center">
+  <img src="public/sequence/pro-ai-workflow.gif" alt="Animated OhIc Pro Intelligence workflow showing video import, local analysis setup, tracked subjects, multilingual captions, and evidence-grounded chat" width="960">
+</p>
+
+<p align="center"><sub>Import a video, analyze speech and subjects locally, then search it with timestamp-grounded AI.</sub></p>
+
+After setup:
+
+1. Open an imported video and choose **Pro**, then **Analyze this video**.
+2. Choose multilingual Whisper or Tara for Hindi/Hinglish code-switching, select a language hint,
+   and decide whether to track people, common objects, or both. RF-DETR Small detects subjects and
+   ByteTrack follows them through the clip. The original video is never modified.
+3. Turn captions on in the player, search the transcript, or choose any timestamp to seek there.
+4. Open **Subjects** to see appearance windows. Give a person a name or link the track to a name
+   you assigned earlier. OhIc remembers that label in its local identity vault; it does not guess
+   real-world identity or run cloud face recognition.
+5. Open **Ask**, choose Transcript, Video, or both retrieval indexes, and ask about speech, people,
+   objects, visible moments, or the current playhead. OhIc runs read-only retrieval tools over
+   multilingual transcript embeddings, CLIP video-frame embeddings, tracked appearances, and
+   metadata before Qwen writes the answer. Answers include clickable evidence timestamps, and the
+   interface shows which local tools were used.
+
+
+<p align="center">
   <img src="public/UI1.png" alt="OhIc enhancement workspace showing video playback, resolution targets, quality controls, preview selection, and watch-while-enhancing" width="960">
 </p>
 
@@ -244,28 +267,6 @@ next part is ready.
 Choose **Pro** in the top navigation. The first screen explains the local models and their disk
 size. Nothing is installed until you choose **Download Pro**; an interrupted download can be
 resumed.
-
-<p align="center">
-  <img src="public/sequence/pro-ai-workflow.gif" alt="Animated OhIc Pro Intelligence workflow showing video import, local analysis setup, tracked subjects, multilingual captions, and evidence-grounded chat" width="960">
-</p>
-
-<p align="center"><sub>Import a video, analyze speech and subjects locally, then search it with timestamp-grounded AI.</sub></p>
-
-After setup:
-
-1. Open an imported video and choose **Pro**, then **Analyze this video**.
-2. Choose multilingual Whisper or Tara for Hindi/Hinglish code-switching, select a language hint,
-   and decide whether to track people, common objects, or both. RF-DETR Small detects subjects and
-   ByteTrack follows them through the clip. The original video is never modified.
-3. Turn captions on in the player, search the transcript, or choose any timestamp to seek there.
-4. Open **Subjects** to see appearance windows. Give a person a name or link the track to a name
-   you assigned earlier. OhIc remembers that label in its local identity vault; it does not guess
-   real-world identity or run cloud face recognition.
-5. Open **Ask**, choose Transcript, Video, or both retrieval indexes, and ask about speech, people,
-   objects, visible moments, or the current playhead. OhIc runs read-only retrieval tools over
-   multilingual transcript embeddings, CLIP video-frame embeddings, tracked appearances, and
-   metadata before Qwen writes the answer. Answers include clickable evidence timestamps, and the
-   interface shows which local tools were used.
 
 ## macOS disk image
 
