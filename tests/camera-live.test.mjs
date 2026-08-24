@@ -23,3 +23,10 @@ test("a live camera checkpoint can enter enhancement or Pro", () => {
   assert.match(app, /onCameraCheckpoint=\{sourceLoaded\}/);
   assert.match(app, /destination === "pro"/);
 });
+
+test("secure phone streaming is explicit and refreshes the pairing QR", () => {
+  assert.match(api, /enableCameraSecureRelay/);
+  assert.match(picker, /Enable secure live streaming/);
+  assert.match(picker, /temporary Cloudflare HTTPS relay/);
+  assert.match(picker, /cameraQrCode\(next\.pairing_url\)/);
+});

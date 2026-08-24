@@ -1,5 +1,6 @@
 import io
 import subprocess
+import sys
 import time
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -36,6 +37,15 @@ def test_phone_pairing_streams_frames_and_registers_a_video(tmp_path: Path):
         assert "audio: true" in manager.phone_page(token)
         assert "continuing with video only" in manager.phone_page(token)
         assert 'capture="environment"' in manager.phone_page(token)
+        assert "Enable secure live streaming" in manager.phone_page(token)
+        assert manager._server
+        port = manager._server.server_address[1]
+        with urlopen(  # noqa: S310 - loopback test server
+            f"http://127.0.0.1:{port}/camera/{token}", timeout=5
+        ) as response:
+            assert response.headers["Cache-Control"] == "no-store"
+            assert response.headers["Referrer-Policy"] == "no-referrer"
+            assert "default-src 'self'" in response.headers["Content-Security-Policy"]
         for color in ((255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0)):
             manager.add_frame(token, jpeg_frame(color))
         assert manager.get(session.id).status == CameraSessionStatus.STREAMING
@@ -57,6 +67,60 @@ def test_phone_pairing_streams_frames_and_registers_a_video(tmp_path: Path):
         assert database.get_video(current.video.id)
     finally:
         manager.close()
+
+
+def test_secure_relay_replaces_the_qr_and_stops_with_the_manager(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    settings = Settings(data_dir=tmp_path)
+    settings.ensure_directories()
+    manager = CameraSessionManager(
+        settings,
+        VideoService(settings, Database(tmp_path / "ohic.sqlite3")),
+    )
+    command = [
+        sys.executable,
+        "-u",
+        "-c",
+        (
+            "import time; "
+            "print('relay ready: https://quiet-camera-test.trycloudflare.com', flush=True); "
+            "time.sleep(60)"
+        ),
+    ]
+    monkeypatch.setattr(manager, "_relay_command", lambda _port: command)
+    monkeypatch.setattr(
+        manager,
+        "_wait_for_relay",
+        lambda _process, _output: None,
+    )
+    process = None
+    try:
+        session = manager.create()
+        waiting_session = manager.create()
+        assert session.relay_status.value == "local"
+        secure = manager.enable_secure_relay(session.id)
+        process = manager._relay_process
+
+        assert secure.relay_status.value == "ready"
+        assert secure.pairing_url.startswith(
+            "https://quiet-camera-test.trycloudflare.com/camera/"
+        )
+        assert process and process.poll() is None
+        waiting_secure = manager.get(waiting_session.id)
+        assert waiting_secure and waiting_secure.relay_status.value == "ready"
+        assert waiting_secure.pairing_url.startswith(
+            "https://quiet-camera-test.trycloudflare.com/camera/"
+        )
+
+        next_session = manager.create()
+        assert next_session.relay_status.value == "ready"
+        assert next_session.pairing_url.startswith(
+            "https://quiet-camera-test.trycloudflare.com/camera/"
+        )
+    finally:
+        manager.close()
+    assert process and process.poll() is not None
 
 
 def test_phone_live_video_chunks_are_durable_and_checkpointable(tmp_path: Path):

@@ -22,4 +22,6 @@ test("launcher preserves the optional Pro runtime", () => {
   assert.match(source, /uv sync --frozen --no-dev --inexact --python 3\.12/);
   assert.match(source, /uv run --no-sync python -c/);
   assert.match(source, /uv run --no-sync uvicorn/);
+  assert.match(source, /install_cloudflared/);
+  assert.match(source, /pkg\.cloudflare\.com\/cloudflared/);
 });

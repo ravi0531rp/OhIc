@@ -21,6 +21,9 @@ test("DMG bundles relocatable runtimes and verifies the mounted app", async () =
   ]);
 
   assert.match(build, /dylibbundler/);
+  assert.match(build, /bin\/cloudflared/);
+  assert.match(build, /codesign --force --sign - "\$RESOURCE_DIR\/bin\/cloudflared"/);
+  assert.match(smoke, /cloudflared.*--version/);
   assert.match(build, /cp "\$UV_BIN"/);
   assert.match(build, /react react-dom scheduler/);
   assert.match(build, /codesign --force --deep --sign/);
