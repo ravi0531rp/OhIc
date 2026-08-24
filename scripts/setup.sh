@@ -18,6 +18,11 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v cloudflared >/dev/null 2>&1; then
+  echo "cloudflared is required for secure phone streaming. Install it from https://developers.cloudflare.com/tunnel/downloads/"
+  exit 1
+fi
+
 echo "Setting up the enhancement engine…"
 (cd "$PROJECT_DIR/backend" && uv sync --group dev)
 

@@ -228,7 +228,7 @@ as_root() {
   elif command -v sudo >/dev/null 2>&1; then
     sudo "$@"
   else
-    fail "Administrator access is required to install FFmpeg."
+    fail "Administrator access is required to install system dependencies."
   fi
 }
 
@@ -270,6 +270,50 @@ install_ffmpeg() {
   command -v ffprobe >/dev/null 2>&1 || fail "FFprobe installation did not complete."
 }
 
+install_cloudflared() {
+  if command -v cloudflared >/dev/null 2>&1; then
+    note "$(cloudflared --version | head -n 1)"
+    return
+  fi
+
+  say "Installing the secure phone-streaming relay"
+  if [[ "$PLATFORM" == "macos" ]]; then
+    if ! command -v brew >/dev/null 2>&1; then
+      note "Homebrew is needed for the signed macOS cloudflared distribution."
+      NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      if [[ -x /opt/homebrew/bin/brew ]]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+      elif [[ -x /usr/local/bin/brew ]]; then
+        eval "$(/usr/local/bin/brew shellenv)"
+      fi
+    fi
+    command -v brew >/dev/null 2>&1 || fail "Homebrew installation did not complete."
+    brew install cloudflared
+  elif command -v apt-get >/dev/null 2>&1; then
+    as_root mkdir -p --mode=0755 /usr/share/keyrings
+    curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
+      | as_root tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+    printf '%s\n' 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' \
+      | as_root tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
+    as_root apt-get update
+    as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y cloudflared
+  elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
+    curl -fsSL https://pkg.cloudflare.com/cloudflared.repo \
+      | as_root tee /etc/yum.repos.d/cloudflared.repo >/dev/null
+    if command -v dnf >/dev/null 2>&1; then
+      as_root dnf install -y cloudflared
+    else
+      as_root yum install -y cloudflared
+    fi
+  elif command -v pacman >/dev/null 2>&1; then
+    as_root pacman -Sy --needed --noconfirm cloudflared
+  else
+    fail "No supported cloudflared package source was found. See https://developers.cloudflare.com/tunnel/downloads/."
+  fi
+
+  command -v cloudflared >/dev/null 2>&1 || fail "cloudflared installation did not complete."
+}
+
 download_source() {
   say "Downloading OhIc"
   TEMP_DIR="${TEMP_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/ohic-install.XXXXXX")}"
@@ -302,6 +346,7 @@ fi
 install_uv
 install_node
 install_ffmpeg
+install_cloudflared
 
 mkdir -p "$DATA_DIR/uploads" "$DATA_DIR/downloads" "$DATA_DIR/jobs" \
   "$DATA_DIR/outputs" "$DATA_DIR/models" "$DATA_DIR/temp"

@@ -30,6 +30,7 @@ MOUNTED_APP_DIR="$MOUNT_DIR/OhIc.app"
 APP_DIR="$SMOKE_DIR/OhIc.app"
 ditto "$MOUNTED_APP_DIR" "$APP_DIR"
 RESOURCE_DIR="$APP_DIR/Contents/Resources"
+"$RESOURCE_DIR/bin/cloudflared" --version | grep -qi cloudflared
 
 codesign --verify --deep --strict "$APP_DIR"
 OHIC_DATA_DIR="$SMOKE_DIR/data" \

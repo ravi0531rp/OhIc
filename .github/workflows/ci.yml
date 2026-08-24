@@ -54,7 +54,7 @@ jobs:
           python-version: "3.11"
           enable-cache: true
       - name: Install system media tools
-        run: brew install ffmpeg dylibbundler
+        run: brew install ffmpeg dylibbundler cloudflared
       - run: npm ci
       - name: Install backend runtime
         working-directory: backend

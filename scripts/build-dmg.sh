@@ -32,6 +32,11 @@ NODE_PREFIX="$(cd "$(dirname "$NODE_REAL")/.." && pwd)"
 FFMPEG_BIN="$(command -v ffmpeg)"
 FFPROBE_BIN="$(command -v ffprobe)"
 UV_BIN="$(command -v uv)"
+CLOUDFLARED_BIN="$(command -v cloudflared || true)"
+if [[ -z "$CLOUDFLARED_BIN" ]]; then
+  echo "cloudflared is required for secure phone streaming. Install it with: brew install cloudflared" >&2
+  exit 1
+fi
 
 mkdir -p "$APP_DIR/Contents/MacOS" "$RESOURCE_DIR/bin" "$RESOURCE_DIR/lib" "$WORK_DIR/image" "$RELEASE_DIR"
 cp "$PROJECT_DIR/packaging/OhIc" "$APP_DIR/Contents/MacOS/OhIc"
@@ -55,6 +60,8 @@ cp "$NODE_BIN" "$RESOURCE_DIR/bin/node"
 cp "$FFMPEG_BIN" "$RESOURCE_DIR/bin/ffmpeg"
 cp "$FFPROBE_BIN" "$RESOURCE_DIR/bin/ffprobe"
 cp "$UV_BIN" "$RESOURCE_DIR/bin/uv"
+cp "$CLOUDFLARED_BIN" "$RESOURCE_DIR/bin/cloudflared"
+chmod +x "$RESOURCE_DIR/bin/cloudflared"
 if command -v dylibbundler >/dev/null 2>&1; then
   if ! dylibbundler -od -b \
     -x "$RESOURCE_DIR/bin/node" \
@@ -76,6 +83,7 @@ if command -v dylibbundler >/dev/null 2>&1; then
     # install_name_tool invalidates dylibbundler's ad-hoc signature.
     codesign --force --sign - "$BUNDLED_EXECUTABLE"
   done
+  codesign --force --sign - "$RESOURCE_DIR/bin/cloudflared"
 else
   echo "dylibbundler is required to make Node and FFmpeg relocatable." >&2
   exit 1
