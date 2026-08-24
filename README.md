@@ -55,8 +55,8 @@ code, integrating the API, or tuning its configuration, see the
 - Compare original and enhanced video with a draggable wipe or side-by-side view, synchronized
   playback, zoom, and frame stepping.
 - Pair a phone on the same Wi-Fi network with a one-time QR code and turn its camera stream into
-  an imported clip. Mobile browsers may require you to approve local-camera access or a trusted
-  local HTTPS origin.
+  an imported clip. The pairing page uses the phone's native camera recorder over local HTTP and
+  offers live browser streaming when the origin has secure camera access.
 - Select and delete saved uploads, YouTube downloads, results, previews, and streaming parts from
   the Storage panel.
 - Move the selected video between Restore and **Pro Intelligence** without importing it again.

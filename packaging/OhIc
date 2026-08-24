@@ -4,14 +4,43 @@ set -euo pipefail
 RESOURCE_DIR="$(cd "$(dirname "$0")/../Resources" && pwd)"
 SUPPORT_DIR="$HOME/Library/Application Support/OhIc"
 LOG_DIR="$HOME/Library/Logs/OhIc"
-mkdir -p "$SUPPORT_DIR" "$LOG_DIR"
+mkdir -p "$SUPPORT_DIR/cache" "$SUPPORT_DIR/pycache" "$SUPPORT_DIR/tmp" "$LOG_DIR"
 
 export OHIC_DATA_DIR="$SUPPORT_DIR/data"
 export PYTHONHOME="$RESOURCE_DIR/python"
 export PYTHONPATH="$RESOURCE_DIR/backend:$RESOURCE_DIR/python-packages"
+export PYTHONPYCACHEPREFIX="$SUPPORT_DIR/pycache"
+export XDG_CACHE_HOME="$SUPPORT_DIR/cache"
+export MPLCONFIGDIR="$SUPPORT_DIR/cache/matplotlib"
+export TMPDIR="$SUPPORT_DIR/tmp"
 export PATH="$RESOURCE_DIR/bin:$PATH"
 export DYLD_LIBRARY_PATH="$RESOURCE_DIR/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
 export PORT=3000
+
+open_workspace() {
+  if [[ "${OHIC_SKIP_OPEN:-0}" != "1" ]]; then
+    /usr/bin/open http://localhost:3000 >>"$LOG_DIR/frontend.log" 2>&1
+  fi
+}
+
+show_start_error() {
+  if [[ "${OHIC_SKIP_OPEN:-0}" != "1" ]]; then
+    /usr/bin/osascript -e 'display alert "OhIc could not start" message "Open ~/Library/Logs/OhIc/backend.log and frontend.log for details." as critical' >/dev/null 2>&1 || true
+  fi
+}
+
+if /usr/bin/curl --silent --fail http://127.0.0.1:8000/api/health >/dev/null 2>&1 \
+  && /usr/bin/curl --silent --fail http://127.0.0.1:3000 >/dev/null 2>&1; then
+  open_workspace
+  exit 0
+fi
+
+if /usr/sbin/lsof -nP -iTCP:8000 -sTCP:LISTEN >/dev/null 2>&1 \
+  || /usr/sbin/lsof -nP -iTCP:3000 -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "OhIc cannot start because port 3000 or 8000 is already in use." >>"$LOG_DIR/frontend.log"
+  show_start_error
+  exit 1
+fi
 
 "$RESOURCE_DIR/python/bin/python3" "$RESOURCE_DIR/backend_entry.py" \
   >>"$LOG_DIR/backend.log" 2>&1 &
@@ -26,12 +55,23 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-for _attempt in {1..80}; do
-  if /usr/bin/curl --silent --fail http://127.0.0.1:3000 >/dev/null 2>&1; then
-    /usr/bin/open http://127.0.0.1:3000
+STARTED=0
+for _attempt in {1..240}; do
+  if /usr/bin/curl --silent --fail http://127.0.0.1:8000/api/health >/dev/null 2>&1 \
+    && /usr/bin/curl --silent --fail http://127.0.0.1:3000 >/dev/null 2>&1; then
+    open_workspace
+    STARTED=1
+    break
+  fi
+  if ! kill -0 "$FRONTEND_PID" "$BACKEND_PID" 2>/dev/null; then
     break
   fi
   sleep 0.25
 done
+
+if [[ "$STARTED" -ne 1 ]]; then
+  show_start_error
+  exit 1
+fi
 
 wait "$FRONTEND_PID"

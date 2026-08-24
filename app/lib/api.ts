@@ -3,6 +3,7 @@ import type {
   BatchRecord,
   ComparisonRecord,
   Health,
+  HistoryEntry,
   JobKind,
   JobRecord,
   PlaylistMetadata,
@@ -45,7 +46,7 @@ export const api = {
   cameraSession: (id: string) => request<CameraSession>(`/api/camera/sessions/${id}`),
   cancelCameraSession: (id: string) => request<CameraSession>(`/api/camera/sessions/${id}/cancel`, { method: "POST" }),
   models: () => request<EnhancementModel[]>("/api/models"),
-  history: () => request<JobRecord[]>("/api/jobs"),
+  history: () => request<HistoryEntry[]>("/api/history"),
   job: (id: string) => request<JobRecord>(`/api/jobs/${id}`),
   video: (id: string) => request<VideoRecord>(`/api/videos/${id}`),
   upload: (file: File) => {
@@ -211,7 +212,7 @@ export const api = {
     }),
   chatHistory: (analysisId: string) =>
     request<ChatSession | null>(`/api/pro/analyses/${analysisId}/chat`),
-  askVideo: (analysisId: string, input: { question: string; session_id?: string; current_time?: number; retrieval_sources?: Array<"transcript" | "visual"> }) =>
+  askVideo: (analysisId: string, input: { question: string; session_id?: string; current_time?: number }) =>
     request<{ session: ChatSession; message: ChatSession["messages"][number] }>(
       `/api/pro/analyses/${analysisId}/chat`,
       {
