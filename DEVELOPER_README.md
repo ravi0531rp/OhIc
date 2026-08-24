@@ -331,6 +331,8 @@ Copy `.env.example` to `.env`. Every application setting is listed below.
 | `OHIC_HOST` | IP/hostname | `127.0.0.1` | Bind address used by `python -m app.main`. The bundled shell scripts pass `127.0.0.1` directly and therefore override it. Use `0.0.0.0` only when intentionally exposing the API to the network. |
 | `OHIC_PORT` | integer | `8000` | Port used by `python -m app.main`. Bundled shell scripts pass `8000` directly; update the manual Uvicorn command and frontend API URL for another port. |
 | `OHIC_FRONTEND_ORIGIN` | URL origin | `http://localhost:3000` | Additional browser origin allowed by FastAPI CORS. `http://127.0.0.1:3000` is always also allowed. Supply an origin only—no path or trailing wildcard. |
+| `OHIC_CAMERA_PORT` | integer, 0–65535 | `0` | Port for the token-scoped phone pairing server. `0` selects an available ephemeral port. Set a fixed port when placing the pairing server behind a trusted HTTPS reverse proxy. |
+| `OHIC_CAMERA_PAIRING_BASE_URL` | HTTPS URL or unset | unset | Public base URL shown in the camera QR code. Configure it with `OHIC_CAMERA_PORT` only when a trusted HTTPS reverse proxy forwards `/camera/*` to the pairing server. Mobile browsers require a secure context for camera and microphone access; without one, the native recording upload remains available. |
 | `OHIC_DATA_DIR` | filesystem path | repository `data/` | Root for uploads, downloads, outputs, temporary job data, and `ohic.sqlite3`. Relative paths resolve from the backend process's working directory. Restart after changing it. |
 | `OHIC_MODEL_DIR` | filesystem path or unset | `${OHIC_DATA_DIR}/models` | Model-weight cache. If unset, the backend derives it from `OHIC_DATA_DIR`. |
 | `OHIC_MAX_UPLOAD_GB` | positive number | `20` | Maximum streamed local upload size in GiB. The service reads 4 MiB chunks and deletes the partial file if the limit is crossed. This does not limit YouTube downloads or outputs. |
@@ -795,6 +797,33 @@ can be supplied through `OHIC_YOUTUBE_COOKIES_FILE`; do not commit it.
 - A batch is `partial` when at least one item completes but the entire selection does not.
 - Deleting a playlist deletes only the playlist record; source and result cleanup remains the
   storage service's responsibility.
+
+## Phone live-ingest implementation
+
+The phone bridge deliberately separates a growing network stream from enhancement and Pro
+consumers:
+
+1. The QR token scopes every phone route to one in-memory session. On a trusted HTTPS origin the
+   phone uses `MediaRecorder` with camera and microphone tracks and emits a chunk about every two
+   seconds. The native recording input remains available when secure browser capture is blocked.
+2. Every chunk carries a monotonically increasing sequence number and elapsed capture time. The
+   phone serializes uploads and retries transient failures up to five times.
+3. The pairing server writes the request to a temporary file, verifies ordering and size limits,
+   appends it to the session container under a lock, and only then acknowledges it. Duplicate
+   sequence numbers are idempotent; gaps are rejected instead of silently corrupting the stream.
+4. **Enhance current buffer** and **Analyze current buffer** copy the acknowledged bytes (or a
+   bounded set of compatibility JPEG frames), normalize that immutable snapshot to MP4, and
+   register it as an ordinary camera `VideoRecord`. Existing enhancement and Pro pipelines then
+   operate on a stable file while phone ingestion continues independently.
+5. Stopping on the phone normalizes the complete durable stream and saves it as the final camera
+   capture. A dropped phone connection leaves acknowledged bytes intact, so a checkpoint can
+   still recover captured material.
+
+This checkpoint boundary is intentional: FFmpeg enhancement and multimodal indexing must not read
+a container while its headers and media clusters are still changing. It also bounds GPU work—Pro
+does not repeatedly re-index the full growing stream. Browser camera APIs require a secure context;
+for live mode configure a fixed `OHIC_CAMERA_PORT` behind trusted HTTPS and set
+`OHIC_CAMERA_PAIRING_BASE_URL`. Plain LAN HTTP continues to support native recording transfer.
 
 ## Watch-while-enhancing implementation
 

@@ -77,9 +77,10 @@ After setup:
 - Stop queued or running downloads, enhancements, local batches, and playlist batches.
 - Compare original and enhanced video with a draggable wipe or side-by-side view, synchronized
   playback, zoom, and frame stepping.
-- Pair a phone on the same Wi-Fi network with a one-time QR code and turn its camera stream into
-  an imported clip. The pairing page uses the phone's native camera recorder over local HTTP and
-  offers live browser streaming when the origin has secure camera access.
+- Pair a phone on the same Wi-Fi network with a one-time QR code. On a trusted HTTPS pairing
+  origin, its browser sends ordered, retryable video-and-audio chunks to a durable local buffer.
+  Freeze that buffer at any time to enhance it or run Pro Intelligence while capture continues;
+  native phone recording remains the local-HTTP fallback.
 - Select and delete saved uploads, YouTube downloads, results, previews, and streaming parts from
   the Storage panel.
 - Move the selected video between Restore and **Pro Intelligence** without importing it again.
