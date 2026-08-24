@@ -1,8 +1,13 @@
 import subprocess
 import sys
+import threading
 import time
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
+
+import numpy as np
 
 from app.core.config import Settings
 from app.models.database import Database
@@ -12,9 +17,10 @@ from app.schemas.intelligence import (
     ChatRequest,
     ProSetupState,
     SubjectIdentityRequest,
+    VideoAnalysis,
 )
 from app.schemas.video import SourceType, VideoRecord
-from app.services.intelligence import IntelligenceManager
+from app.services.intelligence import CancelledError, IntelligenceManager
 from app.services.pro import ProSetupService
 from app.video.probe import probe_video
 
@@ -304,3 +310,188 @@ def test_hinglish_recipe_uses_code_switch_model_and_can_skip_objects(tmp_path: P
     assert analysis.transcription_engine == "tara_hinglish"
     assert "Hinglish" in analysis.transcript_segments[0].text
     assert analysis.subjects and {item.kind for item in analysis.subjects} == {"person"}
+
+
+def test_hinglish_transcription_passes_custom_prompt_in_generation_config(
+    tmp_path: Path, monkeypatch
+):
+    settings = Settings(data_dir=tmp_path)
+    database = Database(tmp_path / "ohic.sqlite3")
+    setup = ProSetupService(settings, database)
+    setup.hinglish_path.mkdir(parents=True, exist_ok=True)
+    manager = IntelligenceManager(settings, database, setup)
+    source = tmp_path / "speech.mp4"
+    source.write_bytes(b"test")
+
+    tokenizer = SimpleNamespace(
+        convert_tokens_to_ids=lambda token: {
+            "<|hi|>": 1,
+            "<|mixedcode|>": 2,
+            "<|transcribe|>": 3,
+            "<|notimestamps|>": 4,
+        }[token],
+        decode=lambda *_args, **_kwargs: "namaste hello",
+    )
+
+    class Features:
+        def to(self, *_args):
+            return self
+
+    class FakeProcessor:
+        def __init__(self):
+            self.tokenizer = tokenizer
+
+        def __call__(self, *_args, **_kwargs):
+            return SimpleNamespace(input_features=Features())
+
+    processor = FakeProcessor()
+    original_config = SimpleNamespace(language="hi", task="transcribe")
+    generated_with = {}
+
+    class FakeModel:
+        generation_config = original_config
+
+        def to(self, *_args):
+            return self
+
+        def generate(self, **kwargs):
+            generated_with.update(kwargs)
+            return [[10, 11]]
+
+    fake_model = FakeModel()
+    transformers = ModuleType("transformers")
+    transformers.WhisperProcessor = SimpleNamespace(from_pretrained=lambda *_args: processor)
+    transformers.WhisperForConditionalGeneration = SimpleNamespace(
+        from_pretrained=lambda *_args, **_kwargs: fake_model
+    )
+    torch = ModuleType("torch")
+    torch.cuda = SimpleNamespace(is_available=lambda: False)
+    torch.backends = SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False))
+    torch.float16 = "float16"
+    torch.float32 = "float32"
+    torch.inference_mode = nullcontext
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setitem(sys.modules, "transformers", transformers)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0, stdout=np.zeros(16_000, dtype=np.float32).tobytes()
+        ),
+    )
+
+    language, segments = manager._transcribe_hinglish(source)
+
+    assert language == "hi-en"
+    assert segments[0].text == "namaste hello"
+    assert "forced_decoder_ids" not in generated_with
+    assert "max_new_tokens" not in generated_with
+    prompt_config = generated_with["generation_config"]
+    assert prompt_config.forced_decoder_ids == [(1, 1), (2, 2), (3, 3), (4, 4)]
+    assert prompt_config.language is None
+    assert prompt_config.task is None
+    assert original_config.language == "hi"
+    assert original_config.task == "transcribe"
+
+
+def test_tracker_stops_at_frame_count_even_if_decoder_keeps_returning_frames(
+    tmp_path: Path, monkeypatch
+):
+    settings = Settings(data_dir=tmp_path)
+    database = Database(tmp_path / "ohic.sqlite3")
+    setup = ProSetupService(settings, database)
+    detector_dir = setup.models_dir / "rfdetr"
+    detector_dir.mkdir(parents=True, exist_ok=True)
+    (detector_dir / "rf-detr-small.pth").write_bytes(b"test")
+    manager = IntelligenceManager(settings, database, setup)
+    video = make_video(tmp_path)
+    analysis = manager.database.get_analysis("bounded-tracker")
+    if analysis is None:
+        analysis = VideoAnalysis(id="bounded-tracker", video_id=video.id)
+        database.save_analysis(analysis)
+
+    empty_detections = SimpleNamespace(
+        xyxy=np.empty((0, 4)),
+        class_id=np.empty(0),
+        tracker_id=np.empty(0),
+        confidence=np.empty(0),
+    )
+
+    class Capture:
+        read_count = 0
+        released = False
+
+        def isOpened(self):
+            return True
+
+        def set(self, *_args):
+            return True
+
+        def read(self):
+            self.read_count += 1
+            return True, np.zeros((90, 160, 3), dtype=np.uint8)
+
+        def get(self, prop):
+            return {1: 24, 2: 247, 3: 160, 4: 90}.get(prop, 0)
+
+        def release(self):
+            self.released = True
+
+    capture = Capture()
+    cv2 = ModuleType("cv2")
+    cv2.CAP_PROP_FPS = 1
+    cv2.CAP_PROP_FRAME_COUNT = 2
+    cv2.CAP_PROP_FRAME_WIDTH = 3
+    cv2.CAP_PROP_FRAME_HEIGHT = 4
+    cv2.CAP_PROP_POS_FRAMES = 5
+    cv2.VideoCapture = lambda *_args: capture
+    supervision = ModuleType("supervision")
+    supervision.ByteTrack = lambda **_kwargs: SimpleNamespace(
+        update_with_detections=lambda detections: detections
+    )
+    rfdetr = ModuleType("rfdetr")
+    rfdetr.RFDETRSmall = lambda **_kwargs: SimpleNamespace(
+        predict=lambda *_args, **_kwargs: empty_detections
+    )
+    assets = ModuleType("rfdetr.assets")
+    coco = ModuleType("rfdetr.assets.coco_classes")
+    coco.COCO_CLASSES = []
+    monkeypatch.setitem(sys.modules, "cv2", cv2)
+    monkeypatch.setitem(sys.modules, "supervision", supervision)
+    monkeypatch.setitem(sys.modules, "rfdetr", rfdetr)
+    monkeypatch.setitem(sys.modules, "rfdetr.assets", assets)
+    monkeypatch.setitem(sys.modules, "rfdetr.assets.coco_classes", coco)
+
+    subjects = manager._track_people(analysis, video, threading.Event())
+
+    assert subjects == []
+    assert capture.read_count == 42
+    assert capture.released
+    saved = database.get_analysis(analysis.id)
+    assert saved
+    assert saved.progress <= 80
+    assert int(saved.stage.split("· ")[1].split("%")[0]) <= 100
+
+
+def test_cancel_during_tracking_stays_cancelled(tmp_path: Path):
+    settings = Settings(data_dir=tmp_path, pro_test_mode=True)
+    database = Database(tmp_path / "ohic.sqlite3")
+    setup = ProSetupService(settings, database)
+    video = make_video(tmp_path)
+    database.save_video(video)
+    manager = IntelligenceManager(settings, database, setup)
+
+    analysis = VideoAnalysis(video_id=video.id)
+    database.save_analysis(analysis)
+
+    def cancel_tracker(*_args, **_kwargs):
+        manager.cancel(analysis.id)
+        raise CancelledError
+
+    manager._track_people = cancel_tracker  # type: ignore[method-assign]
+    manager._run(analysis.id, AnalysisCreateRequest(video_id=video.id), video, threading.Event())
+
+    saved = database.get_analysis(analysis.id)
+    assert saved
+    assert saved.status == AnalysisStatus.CANCELLED
+    assert saved.stage == "Cancelled"
