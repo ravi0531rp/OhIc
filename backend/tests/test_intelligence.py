@@ -68,15 +68,15 @@ def wait_until_ready(setup: ProSetupService) -> None:
 
 
 def write_pro_model_markers(setup: ProSetupService) -> None:
-    for path in (
-        setup.qwen_path,
-        setup.whisper_path,
-        setup.hinglish_path,
-        setup.transcript_embedding_path,
-        setup.visual_embedding_path,
-    ):
+    for path in (setup.qwen_path, setup.whisper_path, setup.hinglish_path):
         path.mkdir(parents=True, exist_ok=True)
         (path / "config.json").write_text("{}")
+    for path in (setup.transcript_embedding_path, setup.visual_embedding_path):
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "modules.json").write_text("[]")
+    clip_model = setup.visual_embedding_path / "0_CLIPModel"
+    clip_model.mkdir(parents=True, exist_ok=True)
+    (clip_model / "config.json").write_text("{}")
     detection = setup.models_dir / "rfdetr"
     detection.mkdir(parents=True, exist_ok=True)
     (detection / "rf-detr-small.pth").write_bytes(b"test")
@@ -145,6 +145,30 @@ def test_ready_status_reports_repair_without_losing_existing_models(tmp_path: Pa
     assert status.stage == "Pro runtime needs repair"
     assert "downloaded models are still" in status.detail
     assert setup.model_files_available()
+
+
+def test_completed_install_self_heals_a_stale_incomplete_status(tmp_path: Path):
+    settings = Settings(data_dir=tmp_path)
+    database = Database(tmp_path / "ohic.sqlite3")
+    setup = ProSetupService(settings, database)
+    write_pro_model_markers(setup)
+    database.save_pro_status(
+        setup._new_status().model_copy(
+            update={
+                "state": ProSetupState.ERROR,
+                "progress": 0,
+                "installed_at": datetime.now(UTC),
+                "error": "The Pro installation is incomplete.",
+            }
+        )
+    )
+    setup.runtime_available = lambda: True  # type: ignore[method-assign]
+
+    status = setup.status()
+
+    assert status.state == ProSetupState.READY
+    assert status.progress == 100
+    assert status.error is None
 
 
 def test_repair_reuses_verified_model_files(tmp_path: Path):

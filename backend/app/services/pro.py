@@ -90,6 +90,20 @@ class ProSetupService:
         status.qwen_model = self.qwen_model
         status.whisper_model = self.whisper_model
         status.hinglish_model = self.HINGLISH_MODEL
+        status.estimated_download_bytes = (
+            10_500_000_000 if self.is_apple_silicon else 12_500_000_000
+        )
+        if (
+            status.state == ProSetupState.ERROR
+            and status.installed_at
+            and self.runtime_available()
+        ):
+            status.state = ProSetupState.READY
+            status.progress = 100
+            status.stage = "Pro is ready"
+            status.detail = "The existing local runtime and model downloads passed verification."
+            status.error = None
+            self.database.save_pro_status(status)
         if status.state == ProSetupState.READY and not self.runtime_available():
             status.state = ProSetupState.ERROR
             status.progress = 0
@@ -140,16 +154,12 @@ class ProSetupService:
         if self.settings.pro_test_mode:
             return (self.models_dir / ".test-ready").exists()
         return (
-            all(
-                (path / "config.json").exists()
-                for path in (
-                    self.qwen_path,
-                    self.whisper_path,
-                    self.hinglish_path,
-                    self.transcript_embedding_path,
-                    self.visual_embedding_path,
-                )
-            )
+            (self.qwen_path / "config.json").exists()
+            and (self.whisper_path / "config.json").exists()
+            and (self.hinglish_path / "config.json").exists()
+            and (self.transcript_embedding_path / "modules.json").exists()
+            and (self.visual_embedding_path / "modules.json").exists()
+            and (self.visual_embedding_path / "0_CLIPModel" / "config.json").exists()
             and (self.models_dir / "rfdetr" / "rf-detr-small.pth").exists()
         )
 
