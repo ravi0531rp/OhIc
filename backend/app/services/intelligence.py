@@ -6,6 +6,7 @@ import re
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -288,8 +289,11 @@ class IntelligenceManager:
                     analysis.subtitle_url = f"/api/pro/analyses/{analysis.id}/subtitles.vtt"
                     self._save(analysis)
                     self._write_vtt(analysis)
+                except CancelledError:
+                    raise
                 except Exception as exc:
-                    analysis.warnings.append(f"Transcription was skipped: {exc}")
+                    detail = str(exc) or type(exc).__name__
+                    analysis.warnings.append(f"Transcription was skipped: {detail}")
                     analysis.subtitle_url = f"/api/pro/analyses/{analysis.id}/subtitles.vtt"
                     self._save(analysis)
                     self._write_vtt(analysis)
@@ -299,16 +303,22 @@ class IntelligenceManager:
             )
             if request.track_people or request.track_objects:
                 try:
-                    analysis.subjects = self._track_people(
+                    subjects = self._track_people(
                         analysis,
                         video,
                         cancel,
                         include_people=request.track_people,
                         include_objects=request.track_objects,
                     )
+                    analysis = self.database.get_analysis(analysis_id) or analysis
+                    analysis.subjects = subjects
                     self._save(analysis)
+                except CancelledError:
+                    raise
                 except Exception as exc:
-                    analysis.warnings.append(f"Subject tracking was skipped: {exc}")
+                    analysis = self.database.get_analysis(analysis_id) or analysis
+                    detail = str(exc) or type(exc).__name__
+                    analysis.warnings.append(f"Subject tracking was skipped: {detail}")
                     self._save(analysis)
             self._raise_if_cancelled(cancel)
             analysis = self._set_progress(
@@ -439,6 +449,7 @@ class IntelligenceManager:
             (3, tokenizer.convert_tokens_to_ids("<|transcribe|>")),
             (4, tokenizer.convert_tokens_to_ids("<|notimestamps|>")),
         ]
+        generation_config = self._hinglish_generation_config(model, prefix)
         window_samples = 30 * 16_000
         segments: list[TranscriptSegment] = []
         for offset in range(0, len(audio), window_samples):
@@ -451,8 +462,7 @@ class IntelligenceManager:
             with torch.inference_mode():
                 output = model.generate(
                     input_features=features,
-                    forced_decoder_ids=prefix,
-                    max_new_tokens=444,
+                    generation_config=generation_config,
                 )
             text = tokenizer.decode(output[0], skip_special_tokens=True).strip()
             if text:
@@ -461,6 +471,14 @@ class IntelligenceManager:
                 segments.append(TranscriptSegment(start=start, end=end, text=text))
         del model
         return "hi-en", segments
+
+    @staticmethod
+    def _hinglish_generation_config(model, prefix: list[tuple[int, int]]):
+        generation_config = deepcopy(model.generation_config)
+        generation_config.language = None
+        generation_config.task = None
+        generation_config.forced_decoder_ids = prefix
+        return generation_config
 
     def _parse_segments(self, values: list[dict]) -> list[TranscriptSegment]:
         segments: list[TranscriptSegment] = []
@@ -546,6 +564,13 @@ class IntelligenceManager:
         capture = cv2.VideoCapture(str(video.path))
         fps = capture.get(cv2.CAP_PROP_FPS) or max(video.metadata.fps, 1)
         duration = max(video.metadata.duration, 0.1)
+        reported_frames = capture.get(cv2.CAP_PROP_FRAME_COUNT)
+        frame_count = max(
+            1,
+            round(reported_frames)
+            if math.isfinite(reported_frames) and reported_frames > 0
+            else (video.metadata.frame_count or math.ceil(duration * fps)),
+        )
         sample_seconds = max(0.25, duration / 900)
         step = max(1, round(sample_seconds * fps))
         tracks: dict[tuple[int, int], dict] = {}
@@ -553,69 +578,79 @@ class IntelligenceManager:
         sample_index = 0
         analysis_dir = self._analysis_dir(analysis.id)
         (analysis_dir / "subjects").mkdir(parents=True, exist_ok=True)
-        while capture.isOpened():
-            self._raise_if_cancelled(cancel)
-            capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-            ok, frame = capture.read()
-            if not ok:
-                break
-            timestamp = frame_index / fps
-            detections = model.predict(frame, threshold=0.3)
-            detections = tracker.update_with_detections(detections)
-            for index, xyxy in enumerate(detections.xyxy):
-                class_id = int(detections.class_id[index])
-                try:
-                    label = str(COCO_CLASSES[class_id])
-                except (IndexError, KeyError, TypeError):
-                    label = f"Object {class_id}"
-                is_person = label.lower() == "person"
-                if (is_person and not include_people) or (not is_person and not include_objects):
-                    continue
-                tracker_id = int(detections.tracker_id[index])
-                key = (class_id, tracker_id)
-                x1, y1, x2, y2 = (float(value) for value in xyxy)
-                width = max(1.0, capture.get(cv2.CAP_PROP_FRAME_WIDTH))
-                height = max(1.0, capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                confidence = (
-                    float(detections.confidence[index])
-                    if detections.confidence is not None
-                    else 0.5
-                )
-                if key not in tracks:
-                    subject_id = uuid4().hex
-                    tracks[key] = {
-                        "id": subject_id,
-                        "label": label,
-                        "kind": "person" if is_person else "object",
-                        "appearances": [],
-                    }
-                    self._write_subject_thumbnail(
-                        frame,
-                        (x1 / width, y1 / height, (x2 - x1) / width, (y2 - y1) / height),
-                        analysis_dir / "subjects" / f"{subject_id}.jpg",
+        try:
+            while capture.isOpened() and frame_index < frame_count:
+                self._raise_if_cancelled(cancel)
+                capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+                ok, frame = capture.read()
+                if not ok:
+                    break
+                timestamp = min(duration, frame_index / fps)
+                detections = model.predict(frame, threshold=0.3)
+                detections = tracker.update_with_detections(detections)
+                for index, xyxy in enumerate(detections.xyxy):
+                    class_id = int(detections.class_id[index])
+                    try:
+                        label = str(COCO_CLASSES[class_id])
+                    except (IndexError, KeyError, TypeError):
+                        label = f"Object {class_id}"
+                    is_person = label.lower() == "person"
+                    if (is_person and not include_people) or (
+                        not is_person and not include_objects
+                    ):
+                        continue
+                    tracker_id = int(detections.tracker_id[index])
+                    key = (class_id, tracker_id)
+                    x1, y1, x2, y2 = (float(value) for value in xyxy)
+                    width = max(1.0, capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    height = max(1.0, capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    confidence = (
+                        float(detections.confidence[index])
+                        if detections.confidence is not None
+                        else 0.5
                     )
-                tracks[key]["appearances"].append(
-                    SubjectAppearance(
-                        start=timestamp,
-                        end=min(duration, timestamp + sample_seconds),
-                        box=BoundingBox(
-                            x=max(0, min(1, x1 / width)),
-                            y=max(0, min(1, y1 / height)),
-                            width=max(0.0001, min(1, (x2 - x1) / width)),
-                            height=max(0.0001, min(1, (y2 - y1) / height)),
-                        ),
-                        confidence=max(0, min(1, confidence)),
+                    if key not in tracks:
+                        subject_id = uuid4().hex
+                        tracks[key] = {
+                            "id": subject_id,
+                            "label": label,
+                            "kind": "person" if is_person else "object",
+                            "appearances": [],
+                        }
+                        self._write_subject_thumbnail(
+                            frame,
+                            (
+                                x1 / width,
+                                y1 / height,
+                                (x2 - x1) / width,
+                                (y2 - y1) / height,
+                            ),
+                            analysis_dir / "subjects" / f"{subject_id}.jpg",
+                        )
+                    tracks[key]["appearances"].append(
+                        SubjectAppearance(
+                            start=timestamp,
+                            end=min(duration, timestamp + sample_seconds),
+                            box=BoundingBox(
+                                x=max(0, min(1, x1 / width)),
+                                y=max(0, min(1, y1 / height)),
+                                width=max(0.0001, min(1, (x2 - x1) / width)),
+                                height=max(0.0001, min(1, (y2 - y1) / height)),
+                            ),
+                            confidence=max(0, min(1, confidence)),
+                        )
                     )
-                )
-            sample_index += 1
-            if sample_index % 12 == 0:
-                current = self.database.get_analysis(analysis.id)
-                if current:
-                    current.progress = min(80, 45 + timestamp / duration * 35)
-                    current.stage = f"RF-DETR + ByteTrack · {timestamp / duration:.0%} scanned"
-                    self._save(current)
-            frame_index += step
-        capture.release()
+                sample_index += 1
+                if sample_index % 12 == 0:
+                    scanned = min(1.0, (frame_index + 1) / frame_count)
+                    current = self.database.get_analysis(analysis.id)
+                    if current:
+                        current.progress = 45 + scanned * 35
+                        current.stage = f"RF-DETR + ByteTrack · {scanned:.0%} scanned"
+                        self._save(current)
+                frame_index += step
+        finally:
+            capture.release()
         counters: dict[str, int] = {}
         subjects = []
         for track in tracks.values():

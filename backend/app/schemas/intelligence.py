@@ -95,7 +95,7 @@ class VideoAnalysis(BaseModel):
     video_id: str
     video_name: str | None = None
     status: AnalysisStatus = AnalysisStatus.QUEUED
-    progress: float = 0
+    progress: float = Field(default=0, ge=0, le=100)
     stage: str = "Waiting to start"
     transcript_language: str | None = None
     transcription_engine: Literal["whisper_multilingual", "tara_hinglish"] = "whisper_multilingual"
