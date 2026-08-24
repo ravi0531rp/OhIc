@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import html
 import json
 import math
 import re
 import subprocess
 import threading
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -44,6 +46,16 @@ TERMINAL_ANALYSIS_STATES = {
     AnalysisStatus.FAILED,
     AnalysisStatus.CANCELLED,
 }
+SUBTITLE_SIZE_STYLES = (
+    (64, "caption-92", 92),
+    (79, "caption-84", 84),
+    (97, "caption-76", 76),
+    (124, "caption-68", 68),
+    (math.inf, "caption-60", 60),
+)
+SUBTITLE_MAX_CUE_SECONDS = 3.5
+SUBTITLE_MAX_CUE_UNITS = 68
+SUBTITLE_MAX_CUE_WORDS = 12
 
 
 class QwenVideoRuntime:
@@ -1330,23 +1342,180 @@ class IntelligenceManager:
         )
 
     def _write_vtt(self, analysis: VideoAnalysis) -> None:
-        lines = ["WEBVTT", ""]
-        for segment in analysis.transcript_segments:
+        lines = ["WEBVTT", "", "STYLE"]
+        lines.extend(
+            f"::cue(.{class_name}) {{ font-size: {percentage}%; }}"
+            for _, class_name, percentage in SUBTITLE_SIZE_STYLES
+        )
+        lines.append("")
+        cues = sorted(
+            (
+                cue
+                for segment in analysis.transcript_segments
+                for cue in self._subtitle_cues(segment)
+            ),
+            key=lambda cue: (cue[0], cue[1]),
+        )
+        previous_end = 0.0
+        for start, end, cue_text in cues:
+            start = max(start, previous_end)
+            if end <= start:
+                continue
+            text = html.escape(cue_text.replace("-->", "→"), quote=False)
+            size_class = self._subtitle_size_class(cue_text)
+            if size_class:
+                text = f"<c.{size_class}>{text}</c>"
             lines.extend(
                 [
-                    f"{self._vtt_time(segment.start)} --> {self._vtt_time(segment.end)}",
-                    segment.text.replace("-->", "→"),
+                    f"{self._vtt_time(start)} --> {self._vtt_time(end)}",
+                    text,
                     "",
                 ]
             )
+            previous_end = end
         path = self._analysis_dir(analysis.id) / "subtitles.vtt"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("\n".join(lines), encoding="utf-8")
+        content = "\n".join(lines)
+        if not path.exists() or path.read_text(encoding="utf-8") != content:
+            path.write_text(content, encoding="utf-8")
+
+    @staticmethod
+    def _subtitle_size_class(text: str) -> str | None:
+        display_units = IntelligenceManager._subtitle_display_units(text)
+        if display_units <= 52:
+            return None
+        return next(
+            class_name
+            for maximum, class_name, _ in SUBTITLE_SIZE_STYLES
+            if display_units <= maximum
+        )
+
+    @staticmethod
+    def _subtitle_display_units(text: str) -> int:
+        normalized = " ".join(text.split())
+        return sum(
+            2 if unicodedata.east_asian_width(character) in {"W", "F"} else 1
+            for character in normalized
+            if not unicodedata.combining(character)
+        )
+
+    @classmethod
+    def _subtitle_cues(cls, segment: TranscriptSegment) -> list[tuple[float, float, str]]:
+        words = [
+            word
+            for word in segment.words
+            if word.text.strip() and word.end > word.start
+        ]
+        duration = max(0, segment.end - segment.start)
+        timing_span = words[-1].end - words[0].start if words else 0
+        timestamps_are_usable = bool(words) and all(
+            current.start <= following.start
+            for current, following in zip(words, words[1:], strict=False)
+        )
+        if duration > SUBTITLE_MAX_CUE_SECONDS:
+            timestamps_are_usable = timestamps_are_usable and timing_span >= duration * 0.5
+        if timestamps_are_usable:
+            cues: list[tuple[float, float, str]] = []
+            group: list[TranscriptWord] = []
+            for word in words:
+                candidate = cls._join_subtitle_words([*(item.text for item in group), word.text])
+                group_start = group[0].start if group else word.start
+                exceeds_limit = (
+                    word.end - group_start > SUBTITLE_MAX_CUE_SECONDS
+                    or cls._subtitle_display_units(candidate) > SUBTITLE_MAX_CUE_UNITS
+                    or len(group) >= SUBTITLE_MAX_CUE_WORDS
+                )
+                if group and exceeds_limit:
+                    cues.append(cls._timed_word_cue(segment, group))
+                    group = []
+                group.append(word)
+            if group:
+                cues.append(cls._timed_word_cue(segment, group))
+            return [cue for cue in cues if cue[1] > cue[0] and cue[2]]
+        return cls._fallback_subtitle_cues(segment)
+
+    @classmethod
+    def _timed_word_cue(
+        cls, segment: TranscriptSegment, words: list[TranscriptWord]
+    ) -> tuple[float, float, str]:
+        start = max(segment.start, words[0].start)
+        end = min(segment.end, words[-1].end, start + SUBTITLE_MAX_CUE_SECONDS)
+        return start, end, cls._join_subtitle_words([word.text for word in words])
+
+    @classmethod
+    def _fallback_subtitle_cues(
+        cls, segment: TranscriptSegment
+    ) -> list[tuple[float, float, str]]:
+        text = " ".join(segment.text.split())
+        if not text:
+            return []
+        tokens = text.split()
+        if len(tokens) == 1 and any(
+            unicodedata.east_asian_width(character) in {"W", "F"} for character in text
+        ):
+            tokens = list(text)
+        duration = max(0.1, segment.end - segment.start)
+        target_count = max(
+            1,
+            math.ceil(duration / SUBTITLE_MAX_CUE_SECONDS),
+            math.ceil(cls._subtitle_display_units(text) / SUBTITLE_MAX_CUE_UNITS),
+            math.ceil(len(tokens) / SUBTITLE_MAX_CUE_WORDS),
+        )
+        target_count = min(len(tokens), target_count)
+        base_size, extra = divmod(len(tokens), target_count)
+        chunks = []
+        offset = 0
+        for index in range(target_count):
+            size = base_size + (1 if index < extra else 0)
+            chunks.append(cls._join_subtitle_words(tokens[offset : offset + size]))
+            offset += size
+        cue_span = duration / len(chunks)
+        return [
+            (
+                segment.start + index * cue_span,
+                min(
+                    segment.end,
+                    segment.start + (index + 1) * cue_span,
+                    segment.start + index * cue_span + SUBTITLE_MAX_CUE_SECONDS,
+                ),
+                chunk,
+            )
+            for index, chunk in enumerate(chunks)
+        ]
+
+    @staticmethod
+    def _join_subtitle_words(words: list[str]) -> str:
+        closing_punctuation = set(",.!?;:%)]}，。！？；：、")
+        opening_punctuation = set("([{“‘")
+        result = ""
+        for raw_word in words:
+            word = raw_word.strip()
+            if not word:
+                continue
+            previous = result[-1] if result else ""
+            first = word[0]
+            both_wide = previous and (
+                unicodedata.east_asian_width(previous) in {"W", "F"}
+                and unicodedata.east_asian_width(first) in {"W", "F"}
+            )
+            separator = (
+                ""
+                if not result
+                or first in closing_punctuation
+                or previous in opening_punctuation
+                or both_wide
+                else " "
+            )
+            result += separator + word
+        return result
 
     def _analysis_dir(self, analysis_id: str) -> Path:
         return self.root / "analyses" / analysis_id
 
     def subtitle_path(self, analysis_id: str) -> Path:
+        analysis = self.database.get_analysis(analysis_id)
+        if analysis and analysis.transcript_segments:
+            self._write_vtt(analysis)
         return self._analysis_dir(analysis_id) / "subtitles.vtt"
 
     def subject_thumbnail_path(self, analysis_id: str, subject_id: str) -> Path:
