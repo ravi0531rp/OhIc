@@ -1,3 +1,4 @@
+import math
 import subprocess
 import sys
 import threading
@@ -14,8 +15,10 @@ from app.models.database import Database
 from app.schemas.intelligence import (
     AnalysisCreateRequest,
     AnalysisStatus,
+    BoundingBox,
     ChatRequest,
     ProSetupState,
+    SubjectAppearance,
     SubjectIdentityRequest,
     VideoAnalysis,
 )
@@ -83,6 +86,8 @@ def write_pro_model_markers(setup: ProSetupService) -> None:
     clip_model = setup.visual_embedding_path / "0_CLIPModel"
     clip_model.mkdir(parents=True, exist_ok=True)
     (clip_model / "config.json").write_text("{}")
+    setup.person_reid_path.mkdir(parents=True, exist_ok=True)
+    (setup.person_reid_path / "osnet_x0_25_msmt17.onnx").write_bytes(b"test")
     detection = setup.models_dir / "rfdetr"
     detection.mkdir(parents=True, exist_ok=True)
     (detection / "rf-detr-small.pth").write_bytes(b"test")
@@ -239,27 +244,22 @@ def test_analysis_identity_memory_and_grounded_chat_persist(tmp_path: Path):
     assert response.message.citations
     assert database.get_chat_session(response.session.id)
 
-    transcript_only = manager.chat(
+    follow_up = manager.chat(
         analysis.id,
-        ChatRequest(
-            question="What was said?",
-            retrieval_sources={"transcript"},
-        ),
+        ChatRequest(question="Search again and find another example."),
     )
-    transcript_tools = {call.name for call in transcript_only.message.tool_calls}
-    assert "search_transcript_embeddings" in transcript_tools
-    assert "search_video_embeddings" not in transcript_tools
-
-    visual_only = manager.chat(
-        analysis.id,
-        ChatRequest(
-            question="What is visible?",
-            retrieval_sources={"visual"},
-        ),
+    assert follow_up.session.id == response.session.id
+    assert len(follow_up.session.messages) == 4
+    follow_up_tools = {call.name for call in follow_up.message.tool_calls}
+    assert "search_transcript_embeddings" in follow_up_tools
+    assert "search_video_embeddings" in follow_up_tools
+    transcript_search = next(
+        call
+        for call in follow_up.message.tool_calls
+        if call.name == "search_transcript_embeddings"
     )
-    visual_tools = {call.name for call in visual_only.message.tool_calls}
-    assert "search_video_embeddings" in visual_tools
-    assert "search_transcript_embeddings" not in visual_tools
+    assert "Who is the person" in transcript_search.arguments["query"]
+    assert "Search again" in transcript_search.arguments["query"]
 
 
 def test_optional_tracking_failure_keeps_transcript_and_visual_analysis(tmp_path: Path):
@@ -462,7 +462,9 @@ def test_tracker_stops_at_frame_count_even_if_decoder_keeps_returning_frames(
     monkeypatch.setitem(sys.modules, "rfdetr.assets", assets)
     monkeypatch.setitem(sys.modules, "rfdetr.assets.coco_classes", coco)
 
-    subjects = manager._track_people(analysis, video, threading.Event())
+    subjects = manager._track_people(
+        analysis, video, threading.Event(), include_people=False, include_objects=True
+    )
 
     assert subjects == []
     assert capture.read_count == 42
@@ -471,6 +473,95 @@ def test_tracker_stops_at_frame_count_even_if_decoder_keeps_returning_frames(
     assert saved
     assert saved.progress <= 80
     assert int(saved.stage.split("· ")[1].split("%")[0]) <= 100
+
+
+def test_person_reid_survives_motion_and_keeps_simultaneous_people_separate(
+    tmp_path: Path
+):
+    settings = Settings(data_dir=tmp_path)
+    database = Database(tmp_path / "ohic.sqlite3")
+    setup = ProSetupService(settings, database)
+    manager = IntelligenceManager(settings, database, setup)
+    manager._write_subject_thumbnail = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    tracks = []
+    subjects_dir = tmp_path / "subjects"
+
+    manager._associate_people(
+        tracks,
+        [{"box": (0.05, 0.05, 0.25, 0.75), "confidence": 0.9}],
+        np.asarray([[1.0, 0.0]], dtype=np.float32),
+        0,
+        1,
+        frame,
+        subjects_dir,
+    )
+    manager._associate_people(
+        tracks,
+        [{"box": (0.65, 0.1, 0.25, 0.75), "confidence": 0.88}],
+        np.asarray([[0.75, math.sqrt(1 - 0.75**2)]], dtype=np.float32),
+        30,
+        1,
+        frame,
+        subjects_dir,
+    )
+    assert len(tracks) == 1
+    assert len(tracks[0]["appearances"]) == 2
+
+    heads = [
+        {"box": (0.1, 0.82, 0.08, 0.1), "confidence": 0.8},
+        {"box": (0.72, 0.82, 0.08, 0.1), "confidence": 0.8},
+    ]
+    head_embeddings = np.asarray([[0.0, 1.0], [0.0, 1.0]], dtype=np.float32)
+    manager._associate_people(
+        tracks, heads, head_embeddings, 31, 1, frame, subjects_dir
+    )
+    manager._associate_people(
+        tracks, list(reversed(heads)), head_embeddings, 32, 1, frame, subjects_dir
+    )
+
+    assert len(tracks) == 3
+    assert sorted(len(track["appearances"]) for track in tracks) == [2, 2, 2]
+
+
+def test_person_tracklet_consolidation_merges_pose_modes_but_not_concurrent_people(
+    tmp_path: Path
+):
+    settings = Settings(data_dir=tmp_path)
+    database = Database(tmp_path / "ohic.sqlite3")
+    setup = ProSetupService(settings, database)
+    manager = IntelligenceManager(settings, database, setup)
+
+    def track(identifier: str, start: float, descriptor: list[float], x: float):
+        appearance = SubjectAppearance(
+            start=start,
+            end=start + 1,
+            box=BoundingBox(x=x, y=0.1, width=0.2, height=0.7),
+            confidence=0.9,
+        )
+        return {
+            "id": identifier,
+            "label": "Person",
+            "kind": "person",
+            "appearances": [appearance],
+            "descriptor": np.asarray(descriptor, dtype=np.float32),
+            "descriptor_samples": 5,
+            "last_box": (x, 0.1, 0.2, 0.7),
+            "last_time": start,
+            "best_area": 0.14,
+        }
+
+    consolidated = manager._consolidate_person_tracks(
+        [
+            track("front", 0, [1.0, 0.0], 0.1),
+            track("side", 10, [0.7, math.sqrt(1 - 0.7**2)], 0.7),
+            track("other", 0, [0.8, 0.6], 0.7),
+        ]
+    )
+
+    assert len(consolidated) == 2
+    merged = next(item for item in consolidated if len(item["appearances"]) == 2)
+    assert {item.start for item in merged["appearances"]} == {0, 10}
 
 
 def test_cancel_during_tracking_stays_cancelled(tmp_path: Path):
