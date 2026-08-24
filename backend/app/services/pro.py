@@ -23,13 +23,21 @@ class ProSetupService:
     MAC_WHISPER = "mlx-community/whisper-large-v3-turbo"
     PORTABLE_QWEN = "Qwen/Qwen3-VL-2B-Instruct"
     PORTABLE_WHISPER = "Systran/faster-whisper-large-v3-turbo"
+    HINGLISH_MODEL = "Trelis/tara"
+    TRANSCRIPT_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    VISUAL_EMBEDDING_MODEL = "sentence-transformers/clip-ViT-B-32"
 
     def __init__(self, settings: Settings, database: Database):
         self.settings = settings
         self.database = database
         self.root = settings.data_dir / "intelligence"
         self.models_dir = self.root / "models"
+        self.runtime_dir = self.root / "runtime-packages"
         self.models_dir.mkdir(parents=True, exist_ok=True)
+        self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        runtime_path = str(self.runtime_dir)
+        if runtime_path not in sys.path:
+            sys.path.insert(0, runtime_path)
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ohic-pro-setup")
         self._lock = threading.RLock()
         persisted = self.database.get_pro_status()
@@ -64,11 +72,24 @@ class ProSetupService:
     def whisper_path(self) -> Path:
         return self.models_dir / "whisper"
 
+    @property
+    def hinglish_path(self) -> Path:
+        return self.models_dir / "tara-hinglish"
+
+    @property
+    def transcript_embedding_path(self) -> Path:
+        return self.models_dir / "transcript-embeddings"
+
+    @property
+    def visual_embedding_path(self) -> Path:
+        return self.models_dir / "visual-embeddings"
+
     def status(self) -> ProStatus:
         status = self.database.get_pro_status() or self._new_status()
         status.platform = self._platform_label()
         status.qwen_model = self.qwen_model
         status.whisper_model = self.whisper_model
+        status.hinglish_model = self.HINGLISH_MODEL
         if status.state == ProSetupState.READY and not self.runtime_available():
             status.state = ProSetupState.ERROR
             status.progress = 0
@@ -104,7 +125,7 @@ class ProSetupService:
     def runtime_available(self) -> bool:
         if self.settings.pro_test_mode:
             return (self.models_dir / ".test-ready").exists()
-        required = ["cv2", "huggingface_hub"]
+        required = ["cv2", "huggingface_hub", "rfdetr", "sentence_transformers", "supervision"]
         required.extend(
             ["mlx_vlm", "mlx_whisper"]
             if self.is_apple_silicon
@@ -118,9 +139,19 @@ class ProSetupService:
     def model_files_available(self) -> bool:
         if self.settings.pro_test_mode:
             return (self.models_dir / ".test-ready").exists()
-        return (self.qwen_path / "config.json").exists() and (
-            self.whisper_path / "config.json"
-        ).exists()
+        return (
+            all(
+                (path / "config.json").exists()
+                for path in (
+                    self.qwen_path,
+                    self.whisper_path,
+                    self.hinglish_path,
+                    self.transcript_embedding_path,
+                    self.visual_embedding_path,
+                )
+            )
+            and (self.models_dir / "rfdetr" / "rf-detr-small.pth").exists()
+        )
 
     def require_ready(self) -> None:
         status = self.status()
@@ -134,7 +165,8 @@ class ProSetupService:
             platform=self._platform_label(),
             qwen_model=self.qwen_model,
             whisper_model=self.whisper_model,
-            estimated_download_bytes=5_500_000_000 if self.is_apple_silicon else 7_500_000_000,
+            hinglish_model=self.HINGLISH_MODEL,
+            estimated_download_bytes=10_500_000_000 if self.is_apple_silicon else 12_500_000_000,
         )
 
     def _platform_label(self) -> str:
@@ -184,11 +216,14 @@ class ProSetupService:
             "Installing the optional runtime",
             "This is isolated inside OhIc's Python environment.",
         )
-        packages = ["huggingface-hub>=0.34"]
+        packages = [
+            "huggingface-hub>=0.34",
+            "rfdetr>=1.4,<2",
+            "sentence-transformers>=5,<6",
+            "supervision>=0.27,<1",
+        ]
         if self.is_apple_silicon:
-            packages.extend(
-                ["mlx-vlm>=0.3", "mlx-whisper>=0.4", "opencv-python>=4.10,<5"]
-            )
+            packages.extend(["mlx-vlm>=0.3", "mlx-whisper>=0.4", "opencv-python>=4.10,<5"])
         else:
             packages.extend(
                 [
@@ -201,13 +236,16 @@ class ProSetupService:
             )
         uv = shutil.which("uv")
         command = (
-            [uv, "pip", "install", "--python", sys.executable, *packages]
+            [uv, "pip", "install", "--target", str(self.runtime_dir), "--upgrade", *packages]
             if uv
             else [
                 sys.executable,
                 "-m",
                 "pip",
                 "install",
+                "--target",
+                str(self.runtime_dir),
+                "--upgrade",
                 *packages,
             ]
         )
@@ -239,6 +277,25 @@ class ProSetupService:
             65,
             "Downloading the local video-language model",
         )
+        self._download_snapshot(
+            self.HINGLISH_MODEL,
+            self.hinglish_path,
+            78,
+            "Downloading Hindi and Hinglish transcription",
+        )
+        self._download_snapshot(
+            self.TRANSCRIPT_EMBEDDING_MODEL,
+            self.transcript_embedding_path,
+            86,
+            "Downloading multilingual transcript retrieval",
+        )
+        self._download_snapshot(
+            self.VISUAL_EMBEDDING_MODEL,
+            self.visual_embedding_path,
+            91,
+            "Downloading visual retrieval",
+        )
+        self._download_detection_model()
         self._update(
             96, "Verifying local models", "Checking that every required model file is present."
         )
@@ -256,6 +313,7 @@ class ProSetupService:
         )
         environment = os.environ.copy()
         environment["HF_HOME"] = str(self.models_dir / ".cache")
+        environment["PYTHONPATH"] = self._runtime_pythonpath(environment)
         completed = subprocess.run(
             [sys.executable, "-c", script],
             capture_output=True,
@@ -267,3 +325,28 @@ class ProSetupService:
         if completed.returncode:
             message = completed.stderr.strip() or completed.stdout.strip()
             raise RuntimeError(f"Model download failed: {message[-900:]}")
+
+    def _download_detection_model(self) -> None:
+        self._update(
+            94,
+            "Downloading object detection and tracking",
+            "Fetching Apache-licensed RF-DETR Small weights.",
+        )
+        environment = os.environ.copy()
+        environment["RF_HOME"] = str(self.models_dir / "rfdetr")
+        environment["PYTHONPATH"] = self._runtime_pythonpath(environment)
+        completed = subprocess.run(
+            [sys.executable, "-c", "from rfdetr import RFDETRSmall; RFDETRSmall()"],
+            capture_output=True,
+            text=True,
+            timeout=3600,
+            check=False,
+            env=environment,
+        )
+        if completed.returncode:
+            message = completed.stderr.strip() or completed.stdout.strip()
+            raise RuntimeError(f"Detection model download failed: {message[-900:]}")
+
+    def _runtime_pythonpath(self, environment: dict[str, str]) -> str:
+        existing = environment.get("PYTHONPATH")
+        return os.pathsep.join(part for part in (str(self.runtime_dir), existing) if part)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import re
 import subprocess
@@ -8,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
+
+import numpy as np
 
 from app.core.config import Settings
 from app.models.database import Database
@@ -144,6 +147,8 @@ class IntelligenceManager:
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ohic-intelligence")
         self._cancel: dict[str, threading.Event] = {}
         self._runtime = QwenVideoRuntime(setup)
+        self._transcript_embedder = None
+        self._visual_embedder = None
 
     def recover_interrupted(self) -> int:
         recovered = 0
@@ -167,7 +172,11 @@ class IntelligenceManager:
         for previous in self.database.analyses_for_video(video.id):
             if previous.status not in {AnalysisStatus.FAILED, AnalysisStatus.CANCELLED}:
                 return previous
-        analysis = VideoAnalysis(video_id=video.id, video_name=video.title or video.original_name)
+        analysis = VideoAnalysis(
+            video_id=video.id,
+            video_name=video.title or video.original_name,
+            transcription_engine=request.transcription_engine,
+        )
         self.database.save_analysis(analysis)
         event = threading.Event()
         self._cancel[analysis.id] = event
@@ -273,7 +282,7 @@ class IntelligenceManager:
             )
             if request.transcribe:
                 try:
-                    language, segments = self._transcribe(Path(video.path))
+                    language, segments = self._transcribe(Path(video.path), request)
                     analysis.transcript_language = language
                     analysis.transcript_segments = segments
                     analysis.subtitle_url = f"/api/pro/analyses/{analysis.id}/subtitles.vtt"
@@ -281,27 +290,32 @@ class IntelligenceManager:
                     self._write_vtt(analysis)
                 except Exception as exc:
                     analysis.warnings.append(f"Transcription was skipped: {exc}")
-                    analysis.subtitle_url = (
-                        f"/api/pro/analyses/{analysis.id}/subtitles.vtt"
-                    )
+                    analysis.subtitle_url = f"/api/pro/analyses/{analysis.id}/subtitles.vtt"
                     self._save(analysis)
                     self._write_vtt(analysis)
             self._raise_if_cancelled(cancel)
             analysis = self._set_progress(
-                analysis_id, AnalysisStatus.TRACKING, 45, "Finding and following people"
+                analysis_id, AnalysisStatus.TRACKING, 45, "Detecting and tracking subjects"
             )
-            if request.track_people:
+            if request.track_people or request.track_objects:
                 try:
-                    analysis.subjects = self._track_people(analysis, video, cancel)
+                    analysis.subjects = self._track_people(
+                        analysis,
+                        video,
+                        cancel,
+                        include_people=request.track_people,
+                        include_objects=request.track_objects,
+                    )
                     self._save(analysis)
                 except Exception as exc:
-                    analysis.warnings.append(f"Person tracking was skipped: {exc}")
+                    analysis.warnings.append(f"Subject tracking was skipped: {exc}")
                     self._save(analysis)
             self._raise_if_cancelled(cancel)
             analysis = self._set_progress(
                 analysis_id, AnalysisStatus.INDEXING, 82, "Building timestamp evidence"
             )
             analysis.keyframes = self._extract_keyframes(analysis, video, cancel)
+            self._build_embedding_index(analysis)
             self._raise_if_cancelled(cancel)
             analysis.status = AnalysisStatus.READY
             analysis.progress = 100
@@ -320,11 +334,23 @@ class IntelligenceManager:
         finally:
             self._cancel.pop(analysis_id, None)
 
-    def _transcribe(self, video_path: Path) -> tuple[str | None, list[TranscriptSegment]]:
+    def _transcribe(
+        self, video_path: Path, request: AnalysisCreateRequest
+    ) -> tuple[str | None, list[TranscriptSegment]]:
         if self.settings.pro_test_mode:
-            return "en", [
-                TranscriptSegment(start=0, end=2.5, text="A local test transcript for this video.")
-            ]
+            language = (
+                "hi-en"
+                if request.transcription_engine == "tara_hinglish"
+                else (request.transcript_language or "en")
+            )
+            text = (
+                "यह local Hinglish test transcript video ke liye hai."
+                if request.transcription_engine == "tara_hinglish"
+                else "A local test transcript for this video."
+            )
+            return language, [TranscriptSegment(start=0, end=2.5, text=text)]
+        if request.transcription_engine == "tara_hinglish":
+            return self._transcribe_hinglish(video_path)
         if self.setup.is_apple_silicon:
             import mlx_whisper
 
@@ -333,6 +359,7 @@ class IntelligenceManager:
                 path_or_hf_repo=str(self.setup.whisper_path),
                 word_timestamps=True,
                 condition_on_previous_text=False,
+                language=request.transcript_language,
                 verbose=False,
             )
             return result.get("language"), self._parse_segments(result.get("segments", []))
@@ -340,7 +367,11 @@ class IntelligenceManager:
 
         model = WhisperModel(str(self.setup.whisper_path), device="auto", compute_type="auto")
         iterable, info = model.transcribe(
-            str(video_path), word_timestamps=True, vad_filter=True, condition_on_previous_text=False
+            str(video_path),
+            word_timestamps=True,
+            vad_filter=True,
+            condition_on_previous_text=False,
+            language=request.transcript_language,
         )
         segments = []
         for item in iterable:
@@ -362,6 +393,74 @@ class IntelligenceManager:
                 )
             )
         return info.language, segments
+
+    def _transcribe_hinglish(self, video_path: Path) -> tuple[str, list[TranscriptSegment]]:
+        import torch
+        from transformers import WhisperForConditionalGeneration, WhisperProcessor
+
+        completed = subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(video_path),
+                "-vn",
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                "-f",
+                "f32le",
+                "pipe:1",
+            ],
+            capture_output=True,
+            timeout=max(120, math.ceil(video_path.stat().st_size / 100_000)),
+            check=False,
+        )
+        if completed.returncode:
+            raise RuntimeError("audio could not be prepared for Hinglish transcription")
+        audio = np.frombuffer(completed.stdout, dtype=np.float32)
+        processor = WhisperProcessor.from_pretrained(str(self.setup.hinglish_path))
+        device = (
+            "cuda"
+            if torch.cuda.is_available()
+            else ("mps" if torch.backends.mps.is_available() else "cpu")
+        )
+        dtype = torch.float16 if device != "cpu" else torch.float32
+        model = WhisperForConditionalGeneration.from_pretrained(
+            str(self.setup.hinglish_path), torch_dtype=dtype
+        ).to(device)
+        tokenizer = processor.tokenizer
+        prefix = [
+            (1, tokenizer.convert_tokens_to_ids("<|hi|>")),
+            (2, tokenizer.convert_tokens_to_ids("<|mixedcode|>")),
+            (3, tokenizer.convert_tokens_to_ids("<|transcribe|>")),
+            (4, tokenizer.convert_tokens_to_ids("<|notimestamps|>")),
+        ]
+        window_samples = 30 * 16_000
+        segments: list[TranscriptSegment] = []
+        for offset in range(0, len(audio), window_samples):
+            chunk = audio[offset : offset + window_samples]
+            if not len(chunk):
+                continue
+            features = processor(
+                chunk, sampling_rate=16_000, return_tensors="pt"
+            ).input_features.to(device, dtype)
+            with torch.inference_mode():
+                output = model.generate(
+                    input_features=features,
+                    forced_decoder_ids=prefix,
+                    max_new_tokens=444,
+                )
+            text = tokenizer.decode(output[0], skip_special_tokens=True).strip()
+            if text:
+                start = offset / 16_000
+                end = min(len(audio), offset + len(chunk)) / 16_000
+                segments.append(TranscriptSegment(start=start, end=end, text=text))
+        del model
+        return "hi-en", segments
 
     def _parse_segments(self, values: list[dict]) -> list[TranscriptSegment]:
         segments: list[TranscriptSegment] = []
@@ -392,10 +491,15 @@ class IntelligenceManager:
         return segments
 
     def _track_people(
-        self, analysis: VideoAnalysis, video: VideoRecord, cancel: threading.Event
+        self,
+        analysis: VideoAnalysis,
+        video: VideoRecord,
+        cancel: threading.Event,
+        include_people: bool = True,
+        include_objects: bool = True,
     ) -> list[SubjectRecord]:
         if self.settings.pro_test_mode:
-            return [
+            subjects = [
                 SubjectRecord(
                     label="Person 1",
                     appearances=[
@@ -408,21 +512,43 @@ class IntelligenceManager:
                     ],
                 )
             ]
-        import cv2
-
-        if not hasattr(cv2, "HOGDescriptor"):
-            raise RuntimeError(
-                "the installed OpenCV build does not include its person detector"
+            if include_objects:
+                subjects.append(
+                    SubjectRecord(
+                        label="Backpack 1",
+                        kind="object",
+                        color=SUBJECT_COLORS[1],
+                        appearances=[
+                            SubjectAppearance(
+                                start=0,
+                                end=min(2.5, video.metadata.duration),
+                                box=BoundingBox(x=0.08, y=0.42, width=0.2, height=0.35),
+                                confidence=0.84,
+                            )
+                        ],
+                    )
+                )
+            return (
+                subjects if include_people else [item for item in subjects if item.kind == "object"]
             )
 
+        import cv2
+        import supervision as sv
+        from rfdetr import RFDETRSmall
+        from rfdetr.assets.coco_classes import COCO_CLASSES
+
+        detection_root = self.setup.models_dir / "rfdetr"
+        weights = detection_root / "rf-detr-small.pth"
+        if not weights.exists():
+            raise RuntimeError("RF-DETR weights are missing; repair Pro setup")
+        model = RFDETRSmall(pretrain_weights=str(weights))
+        tracker = sv.ByteTrack(frame_rate=max(1, round(min(10, max(video.metadata.fps, 1)))))
         capture = cv2.VideoCapture(str(video.path))
         fps = capture.get(cv2.CAP_PROP_FPS) or max(video.metadata.fps, 1)
         duration = max(video.metadata.duration, 0.1)
-        sample_seconds = max(0.6, duration / 300)
+        sample_seconds = max(0.25, duration / 900)
         step = max(1, round(sample_seconds * fps))
-        detector = cv2.HOGDescriptor()
-        detector.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
-        tracks: list[dict] = []
+        tracks: dict[tuple[int, int], dict] = {}
         frame_index = 0
         sample_index = 0
         analysis_dir = self._analysis_dir(analysis.id)
@@ -434,39 +560,78 @@ class IntelligenceManager:
             if not ok:
                 break
             timestamp = frame_index / fps
-            height, width = frame.shape[:2]
-            scale = min(1.0, 720 / max(width, 1))
-            view = cv2.resize(frame, None, fx=scale, fy=scale) if scale < 1 else frame
-            boxes, weights = detector.detectMultiScale(
-                view, winStride=(8, 8), padding=(8, 8), scale=1.05
-            )
-            detections = []
-            for box, confidence in zip(boxes, weights, strict=False):
-                x, y, w, h = [float(value) / scale for value in box]
-                detections.append((x / width, y / height, w / width, h / height, float(confidence)))
-            self._associate_detections(
-                tracks, detections, timestamp, sample_seconds, frame, analysis_dir
-            )
+            detections = model.predict(frame, threshold=0.3)
+            detections = tracker.update_with_detections(detections)
+            for index, xyxy in enumerate(detections.xyxy):
+                class_id = int(detections.class_id[index])
+                try:
+                    label = str(COCO_CLASSES[class_id])
+                except (IndexError, KeyError, TypeError):
+                    label = f"Object {class_id}"
+                is_person = label.lower() == "person"
+                if (is_person and not include_people) or (not is_person and not include_objects):
+                    continue
+                tracker_id = int(detections.tracker_id[index])
+                key = (class_id, tracker_id)
+                x1, y1, x2, y2 = (float(value) for value in xyxy)
+                width = max(1.0, capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = max(1.0, capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                confidence = (
+                    float(detections.confidence[index])
+                    if detections.confidence is not None
+                    else 0.5
+                )
+                if key not in tracks:
+                    subject_id = uuid4().hex
+                    tracks[key] = {
+                        "id": subject_id,
+                        "label": label,
+                        "kind": "person" if is_person else "object",
+                        "appearances": [],
+                    }
+                    self._write_subject_thumbnail(
+                        frame,
+                        (x1 / width, y1 / height, (x2 - x1) / width, (y2 - y1) / height),
+                        analysis_dir / "subjects" / f"{subject_id}.jpg",
+                    )
+                tracks[key]["appearances"].append(
+                    SubjectAppearance(
+                        start=timestamp,
+                        end=min(duration, timestamp + sample_seconds),
+                        box=BoundingBox(
+                            x=max(0, min(1, x1 / width)),
+                            y=max(0, min(1, y1 / height)),
+                            width=max(0.0001, min(1, (x2 - x1) / width)),
+                            height=max(0.0001, min(1, (y2 - y1) / height)),
+                        ),
+                        confidence=max(0, min(1, confidence)),
+                    )
+                )
             sample_index += 1
-            if sample_index % 8 == 0:
+            if sample_index % 12 == 0:
                 current = self.database.get_analysis(analysis.id)
                 if current:
                     current.progress = min(80, 45 + timestamp / duration * 35)
-                    current.stage = f"Tracking people · {timestamp / duration:.0%} scanned"
+                    current.stage = f"RF-DETR + ByteTrack · {timestamp / duration:.0%} scanned"
                     self._save(current)
             frame_index += step
         capture.release()
+        counters: dict[str, int] = {}
         subjects = []
-        for track in tracks:
+        for track in tracks.values():
             if len(track["appearances"]) < 2:
                 continue
+            counters[track["label"]] = counters.get(track["label"], 0) + 1
             subjects.append(
                 SubjectRecord(
                     id=track["id"],
-                    label=f"Person {len(subjects) + 1}",
+                    label=f"{track['label'].title()} {counters[track['label']]}",
+                    kind=track["kind"],
                     color=SUBJECT_COLORS[len(subjects) % len(SUBJECT_COLORS)],
                     appearances=track["appearances"],
-                    thumbnail_url=f"/api/pro/analyses/{analysis.id}/subjects/{track['id']}/thumbnail",
+                    thumbnail_url=(
+                        f"/api/pro/analyses/{analysis.id}/subjects/{track['id']}/thumbnail"
+                    ),
                 )
             )
         return subjects
@@ -568,6 +733,97 @@ class IntelligenceManager:
                 )
         return records
 
+    def _build_embedding_index(self, analysis: VideoAnalysis) -> None:
+        """Persist compact transcript and visual vectors for source-selectable local RAG."""
+        if self.settings.pro_test_mode:
+            transcript_vectors = [
+                self._hashed_embedding(item.text) for item in analysis.transcript_segments
+            ]
+            visual_vectors = [
+                self._hashed_embedding(f"video frame {item.timestamp:.1f}")
+                for item in analysis.keyframes
+            ]
+        else:
+            from PIL import Image
+            from sentence_transformers import SentenceTransformer
+
+            if self._transcript_embedder is None:
+                self._transcript_embedder = SentenceTransformer(
+                    str(self.setup.transcript_embedding_path)
+                )
+            if self._visual_embedder is None:
+                self._visual_embedder = SentenceTransformer(str(self.setup.visual_embedding_path))
+            transcript_vectors = (
+                self._transcript_embedder.encode(
+                    [item.text for item in analysis.transcript_segments],
+                    normalize_embeddings=True,
+                ).tolist()
+                if analysis.transcript_segments
+                else []
+            )
+            images = [
+                Image.open(self._frame_path(analysis, item)).convert("RGB")
+                for item in analysis.keyframes
+                if self._frame_path(analysis, item).exists()
+            ]
+            visual_vectors = (
+                self._visual_embedder.encode(images, normalize_embeddings=True).tolist()
+                if images
+                else []
+            )
+        payload = {
+            "version": 1,
+            "transcript": [
+                {"id": item.id, "vector": vector}
+                for item, vector in zip(
+                    analysis.transcript_segments, transcript_vectors, strict=False
+                )
+            ],
+            "visual": [
+                {"id": item.id, "vector": vector}
+                for item, vector in zip(analysis.keyframes, visual_vectors, strict=False)
+            ],
+        }
+        path = self._embedding_index_path(analysis.id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+
+    def _embedding_scores(
+        self, analysis: VideoAnalysis, query: str, source: str
+    ) -> dict[str, float]:
+        path = self._embedding_index_path(analysis.id)
+        if not path.exists():
+            return {}
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if self.settings.pro_test_mode:
+            query_vector = self._hashed_embedding(query)
+        else:
+            from sentence_transformers import SentenceTransformer
+
+            if source == "transcript":
+                if self._transcript_embedder is None:
+                    self._transcript_embedder = SentenceTransformer(
+                        str(self.setup.transcript_embedding_path)
+                    )
+                query_vector = self._transcript_embedder.encode(
+                    query, normalize_embeddings=True
+                ).tolist()
+            else:
+                if self._visual_embedder is None:
+                    self._visual_embedder = SentenceTransformer(
+                        str(self.setup.visual_embedding_path)
+                    )
+                query_vector = self._visual_embedder.encode(
+                    query, normalize_embeddings=True
+                ).tolist()
+        return {
+            item["id"]: self._cosine(query_vector, item["vector"])
+            for item in payload.get(source, [])
+        }
+
+    def _embedding_index_path(self, analysis_id: str) -> Path:
+        return self._analysis_dir(analysis_id) / "embeddings.json"
+
     def _collect_evidence(
         self, analysis: VideoAnalysis, request: ChatRequest
     ) -> tuple[list[ToolExecution], list[EvidenceCitation], list[Path], list[str]]:
@@ -583,27 +839,40 @@ class IntelligenceManager:
             )
         query_terms = self._query_terms(request.question)
         ranked = []
-        for segment in analysis.transcript_segments:
-            text_terms = self._query_terms(segment.text)
-            overlap = len(query_terms & text_terms)
-            proximity = 0.0
-            if request.current_time is not None:
-                proximity = 1 / (1 + abs(segment.start - request.current_time))
-            ranked.append((overlap * 10 + proximity, segment))
+        transcript_scores = (
+            self._embedding_scores(analysis, request.question, "transcript")
+            if "transcript" in request.retrieval_sources
+            else {}
+        )
+        if "transcript" in request.retrieval_sources:
+            for segment in analysis.transcript_segments:
+                text_terms = self._query_terms(segment.text)
+                overlap = len(query_terms & text_terms)
+                proximity = 0.0
+                if request.current_time is not None:
+                    proximity = 1 / (1 + abs(segment.start - request.current_time))
+                ranked.append(
+                    (overlap * 10 + transcript_scores.get(segment.id, 0) * 4 + proximity, segment)
+                )
         selected_segments = [
             item
             for score, item in sorted(ranked, key=lambda item: item[0], reverse=True)[:6]
             if score > 0
         ]
-        if not selected_segments and analysis.transcript_segments:
+        if (
+            "transcript" in request.retrieval_sources
+            and not selected_segments
+            and analysis.transcript_segments
+        ):
             selected_segments = analysis.transcript_segments[:4]
-        tools.append(
-            ToolExecution(
-                name="search_transcript",
-                arguments={"query": request.question, "limit": 6},
-                result_count=len(selected_segments),
+        if "transcript" in request.retrieval_sources:
+            tools.append(
+                ToolExecution(
+                    name="search_transcript_embeddings",
+                    arguments={"query": request.question, "limit": 6},
+                    result_count=len(selected_segments),
+                )
             )
-        )
         for segment in selected_segments:
             label = f"{self._clock(segment.start)}–{self._clock(segment.end)}"
             evidence.append(f"[transcript {label}] {segment.text}")
@@ -617,9 +886,7 @@ class IntelligenceManager:
                 timed_words = segment.words[max(0, center - 4) : center + 6]
                 evidence.append(
                     "[word timing] "
-                    + " ".join(
-                        f"{word.text}@{self._clock(word.start)}" for word in timed_words
-                    )
+                    + " ".join(f"{word.text}@{self._clock(word.start)}" for word in timed_words)
                 )
             citations.append(
                 EvidenceCitation(
@@ -628,13 +895,16 @@ class IntelligenceManager:
             )
         subject_matches = []
         lower = request.question.lower()
-        for subject in analysis.subjects:
+        for subject in analysis.subjects if "visual" in request.retrieval_sources else []:
             if any(
                 word in lower
                 for word in ("person", "people", "who", "subject", subject.label.lower())
             ):
                 subject_matches.append(subject)
-        if subject_matches or any(word in lower for word in ("person", "people", "who", "subject")):
+        if "visual" in request.retrieval_sources and (
+            subject_matches
+            or any(word in lower for word in ("person", "people", "who", "subject"))
+        ):
             tools.append(ToolExecution(name="list_subjects", result_count=len(analysis.subjects)))
             for subject in (subject_matches or analysis.subjects)[:8]:
                 windows = ", ".join(
@@ -658,22 +928,40 @@ class IntelligenceManager:
         target_times.extend(segment.start for segment in selected_segments[:3])
         if request.current_time is not None:
             target_times.insert(0, request.current_time)
-        if not target_times and analysis.keyframes:
-            target_times = [analysis.keyframes[0].timestamp]
+        visual_scores = (
+            self._embedding_scores(analysis, request.question, "visual")
+            if "visual" in request.retrieval_sources
+            else {}
+        )
+        semantic_frames = (
+            sorted(
+                analysis.keyframes,
+                key=lambda item: visual_scores.get(item.id, -1),
+                reverse=True,
+            )[:4]
+            if "visual" in request.retrieval_sources
+            else []
+        )
         selected_frames: list[KeyframeRecord] = []
         for target in target_times:
-            if analysis.keyframes:
+            if analysis.keyframes and "visual" in request.retrieval_sources:
                 frame = min(analysis.keyframes, key=lambda item: abs(item.timestamp - target))
                 if frame.id not in {item.id for item in selected_frames}:
                     selected_frames.append(frame)
+        for frame in semantic_frames:
+            if frame.id not in {item.id for item in selected_frames}:
+                selected_frames.append(frame)
         selected_frames = selected_frames[:4]
-        tools.append(
-            ToolExecution(
-                name="inspect_frames",
-                arguments={"timestamps": [round(item.timestamp, 2) for item in selected_frames]},
-                result_count=len(selected_frames),
+        if "visual" in request.retrieval_sources:
+            tools.append(
+                ToolExecution(
+                    name="search_video_embeddings",
+                    arguments={
+                        "timestamps": [round(item.timestamp, 2) for item in selected_frames]
+                    },
+                    result_count=len(selected_frames),
+                )
             )
-        )
         image_paths = []
         for frame in selected_frames:
             path = self._frame_path(analysis, frame)
@@ -774,6 +1062,21 @@ class IntelligenceManager:
             for word in re.findall(r"[a-z0-9']+", value.lower())
             if len(word) > 2 and word not in stop
         }
+
+    @staticmethod
+    def _hashed_embedding(value: str, dimensions: int = 64) -> list[float]:
+        vector = np.zeros(dimensions, dtype=np.float32)
+        for word in re.findall(r"\w+", value.lower(), flags=re.UNICODE):
+            vector[sum(ord(character) for character in word) % dimensions] += 1
+        norm = float(np.linalg.norm(vector))
+        return (vector / norm).tolist() if norm else vector.tolist()
+
+    @staticmethod
+    def _cosine(left: list[float], right: list[float]) -> float:
+        left_value = np.asarray(left, dtype=np.float32)
+        right_value = np.asarray(right, dtype=np.float32)
+        denominator = float(np.linalg.norm(left_value) * np.linalg.norm(right_value))
+        return float(np.dot(left_value, right_value) / denominator) if denominator else 0.0
 
     @staticmethod
     def _question_times(value: str) -> list[float]:

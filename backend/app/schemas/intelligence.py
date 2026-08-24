@@ -28,7 +28,9 @@ class ProStatus(BaseModel):
     detail: str = "Nothing has been downloaded."
     qwen_model: str = "mlx-community/Qwen3-VL-4B-Instruct-4bit"
     whisper_model: str = "mlx-community/whisper-large-v3-turbo"
-    estimated_download_bytes: int = 5_500_000_000
+    hinglish_model: str = "Trelis/tara"
+    detector_model: str = "RF-DETR Small + ByteTrack"
+    estimated_download_bytes: int = 10_500_000_000
     installed_at: datetime | None = None
     error: str | None = None
 
@@ -96,6 +98,8 @@ class VideoAnalysis(BaseModel):
     progress: float = 0
     stage: str = "Waiting to start"
     transcript_language: str | None = None
+    transcription_engine: Literal["whisper_multilingual", "tara_hinglish"] = "whisper_multilingual"
+    tracking_model: str = "rf-detr-small+bytetrack"
     transcript_segments: list[TranscriptSegment] = Field(default_factory=list)
     subjects: list[SubjectRecord] = Field(default_factory=list)
     keyframes: list[KeyframeRecord] = Field(default_factory=list)
@@ -110,6 +114,9 @@ class AnalysisCreateRequest(BaseModel):
     video_id: str
     transcribe: bool = True
     track_people: bool = True
+    track_objects: bool = True
+    transcript_language: str | None = Field(default=None, max_length=12)
+    transcription_engine: Literal["whisper_multilingual", "tara_hinglish"] = "whisper_multilingual"
 
 
 class IdentityRecord(BaseModel):
@@ -167,6 +174,9 @@ class ChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     session_id: str | None = None
     current_time: float | None = Field(default=None, ge=0)
+    retrieval_sources: set[Literal["transcript", "visual"]] = Field(
+        default_factory=lambda: {"transcript", "visual"}, min_length=1
+    )
 
 
 class ChatResponse(BaseModel):

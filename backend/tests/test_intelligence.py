@@ -1,4 +1,5 @@
 import subprocess
+import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -66,6 +67,21 @@ def wait_until_ready(setup: ProSetupService) -> None:
     raise AssertionError("test Pro setup did not finish")
 
 
+def write_pro_model_markers(setup: ProSetupService) -> None:
+    for path in (
+        setup.qwen_path,
+        setup.whisper_path,
+        setup.hinglish_path,
+        setup.transcript_embedding_path,
+        setup.visual_embedding_path,
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "config.json").write_text("{}")
+    detection = setup.models_dir / "rfdetr"
+    detection.mkdir(parents=True, exist_ok=True)
+    (detection / "rf-detr-small.pth").write_bytes(b"test")
+
+
 def wait_for_analysis(manager: IntelligenceManager, analysis_id: str):
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
@@ -93,14 +109,25 @@ def test_pro_remains_absent_until_the_user_starts_setup(tmp_path: Path):
     assert setup.runtime_available()
 
 
+def test_optional_runtime_uses_writable_application_data(tmp_path: Path):
+    settings = Settings(data_dir=tmp_path, pro_test_mode=True)
+    database = Database(tmp_path / "ohic.sqlite3")
+    setup = ProSetupService(settings, database)
+
+    assert setup.runtime_dir == tmp_path / "intelligence" / "runtime-packages"
+    assert setup.runtime_dir.is_dir()
+    assert str(setup.runtime_dir) in sys.path
+    assert setup._runtime_pythonpath({"PYTHONPATH": "/bundled/base"}).split(":") == [
+        str(setup.runtime_dir),
+        "/bundled/base",
+    ]
+
+
 def test_ready_status_reports_repair_without_losing_existing_models(tmp_path: Path):
     settings = Settings(data_dir=tmp_path)
     database = Database(tmp_path / "ohic.sqlite3")
     setup = ProSetupService(settings, database)
-    setup.qwen_path.mkdir(parents=True)
-    setup.whisper_path.mkdir(parents=True)
-    (setup.qwen_path / "config.json").write_text("{}")
-    (setup.whisper_path / "config.json").write_text("{}")
+    write_pro_model_markers(setup)
     database.save_pro_status(
         setup._new_status().model_copy(
             update={
@@ -124,10 +151,7 @@ def test_repair_reuses_verified_model_files(tmp_path: Path):
     settings = Settings(data_dir=tmp_path)
     database = Database(tmp_path / "ohic.sqlite3")
     setup = ProSetupService(settings, database)
-    setup.qwen_path.mkdir(parents=True)
-    setup.whisper_path.mkdir(parents=True)
-    (setup.qwen_path / "config.json").write_text("{}")
-    (setup.whisper_path / "config.json").write_text("{}")
+    write_pro_model_markers(setup)
     database.save_pro_status(
         setup._new_status().model_copy(update={"installed_at": datetime.now(UTC)})
     )
@@ -161,6 +185,7 @@ def test_analysis_identity_memory_and_grounded_chat_persist(tmp_path: Path):
     assert analysis.subtitle_url and manager.subtitle_path(analysis.id).exists()
     assert analysis.keyframes
     assert analysis.subjects
+    assert {subject.kind for subject in analysis.subjects} == {"person", "object"}
 
     tagged = manager.tag_subject(
         analysis.id,
@@ -177,12 +202,34 @@ def test_analysis_identity_memory_and_grounded_chat_persist(tmp_path: Path):
     assert response.message.role == "assistant"
     assert {call.name for call in response.message.tool_calls} >= {
         "video_metadata",
-        "search_transcript",
+        "search_transcript_embeddings",
         "list_subjects",
-        "inspect_frames",
+        "search_video_embeddings",
     }
     assert response.message.citations
     assert database.get_chat_session(response.session.id)
+
+    transcript_only = manager.chat(
+        analysis.id,
+        ChatRequest(
+            question="What was said?",
+            retrieval_sources={"transcript"},
+        ),
+    )
+    transcript_tools = {call.name for call in transcript_only.message.tool_calls}
+    assert "search_transcript_embeddings" in transcript_tools
+    assert "search_video_embeddings" not in transcript_tools
+
+    visual_only = manager.chat(
+        analysis.id,
+        ChatRequest(
+            question="What is visible?",
+            retrieval_sources={"visual"},
+        ),
+    )
+    visual_tools = {call.name for call in visual_only.message.tool_calls}
+    assert "search_video_embeddings" in visual_tools
+    assert "search_transcript_embeddings" not in visual_tools
 
 
 def test_optional_tracking_failure_keeps_transcript_and_visual_analysis(tmp_path: Path):
@@ -206,4 +253,30 @@ def test_optional_tracking_failure_keeps_transcript_and_visual_analysis(tmp_path
     assert analysis.status == AnalysisStatus.READY
     assert analysis.transcript_segments
     assert analysis.keyframes
-    assert analysis.warnings == ["Person tracking was skipped: test detector unavailable"]
+    assert analysis.warnings == ["Subject tracking was skipped: test detector unavailable"]
+
+
+def test_hinglish_recipe_uses_code_switch_model_and_can_skip_objects(tmp_path: Path):
+    settings = Settings(data_dir=tmp_path, pro_test_mode=True)
+    database = Database(tmp_path / "ohic.sqlite3")
+    setup = ProSetupService(settings, database)
+    setup.start_install()
+    wait_until_ready(setup)
+    video = make_video(tmp_path)
+    database.save_video(video)
+    manager = IntelligenceManager(settings, database, setup)
+
+    started = manager.create(
+        AnalysisCreateRequest(
+            video_id=video.id,
+            transcription_engine="tara_hinglish",
+            track_objects=False,
+        )
+    )
+    analysis = wait_for_analysis(manager, started.id)
+
+    assert analysis.status == AnalysisStatus.READY
+    assert analysis.transcript_language == "hi-en"
+    assert analysis.transcription_engine == "tara_hinglish"
+    assert "Hinglish" in analysis.transcript_segments[0].text
+    assert analysis.subjects and {item.kind for item in analysis.subjects} == {"person"}
