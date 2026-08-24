@@ -20,6 +20,7 @@ from app.schemas.intelligence import (
     ProSetupState,
     SubjectAppearance,
     SubjectIdentityRequest,
+    TranscriptSegment,
     VideoAnalysis,
 )
 from app.schemas.video import SourceType, VideoRecord
@@ -105,6 +106,38 @@ def wait_for_analysis(manager: IntelligenceManager, analysis_id: str):
             return analysis
         time.sleep(0.03)
     raise AssertionError("test analysis did not finish")
+
+
+def test_subtitle_font_size_scales_with_displayed_text_and_refreshes_existing_vtt(
+    tmp_path: Path,
+):
+    settings = Settings(data_dir=tmp_path, pro_test_mode=True)
+    database = Database(tmp_path / "ohic.sqlite3")
+    manager = IntelligenceManager(settings, database, ProSetupService(settings, database))
+    analysis = VideoAnalysis(
+        id="adaptive-subtitles",
+        video_id="video",
+        status=AnalysisStatus.READY,
+        transcript_segments=[
+            TranscriptSegment(start=0, end=1, text="Short caption stays at the normal size."),
+            TranscriptSegment(start=1, end=2, text="M" * 70),
+            TranscriptSegment(start=2, end=3, text="界" * 70),
+            TranscriptSegment(start=3, end=4, text="Long caption " * 14),
+        ],
+    )
+    database.save_analysis(analysis)
+    path = tmp_path / "intelligence" / "analyses" / analysis.id / "subtitles.vtt"
+    path.parent.mkdir(parents=True)
+    path.write_text("WEBVTT\n\nLegacy captions", encoding="utf-8")
+
+    assert manager.subtitle_path(analysis.id) == path
+
+    subtitles = path.read_text(encoding="utf-8")
+    assert "::cue(.caption-60) { font-size: 60%; }" in subtitles
+    assert "Short caption stays at the normal size.\n" in subtitles
+    assert "<c.caption-84>" in subtitles
+    assert "<c.caption-60>界" in subtitles
+    assert "<c.caption-60>Long caption" in subtitles
 
 
 def test_pro_remains_absent_until_the_user_starts_setup(tmp_path: Path):
