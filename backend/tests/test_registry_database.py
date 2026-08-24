@@ -27,7 +27,8 @@ def test_model_registry_hides_test_model_from_product_list():
     registry = ModelRegistry(include_test=True)
     assert registry.get("realesrgan-x2plus").metadata.scale_factors == (2,)
     assert [model.metadata.identifier for model in ModelRegistry().available()] == [
-        "realesrgan-x2plus"
+        "realesrgan-x2plus",
+        "resize-lanczos",
     ]
     assert registry.get("lanczos-test").metadata.display_name == "Lanczos test model"
 

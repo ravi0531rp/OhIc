@@ -1,5 +1,5 @@
 from app.inference.base import VideoEnhancementModel
-from app.inference.interpolation import InterpolationModel
+from app.inference.interpolation import InterpolationModel, ResizeModel
 from app.inference.realbasicvsr import RealBasicVSREngine
 from app.inference.realesrgan import RealESRGANModel
 
@@ -12,6 +12,7 @@ class ModelRegistry:
     ) -> None:
         self._models: dict[str, EnhancementBackend] = {}
         self.register(RealESRGANModel())
+        self.register(ResizeModel())
         if enable_realbasicvsr:
             self.register(RealBasicVSREngine())
         if include_test:

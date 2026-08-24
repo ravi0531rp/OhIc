@@ -41,3 +41,19 @@ class InterpolationModel(VideoEnhancementModel):
 
     def estimate_memory(self, width: int, height: int, tile_size: int) -> int:
         return width * height * 12
+
+
+class ResizeModel(InterpolationModel):
+    """Production, non-generative resize path for smaller or same-size exports."""
+
+    metadata = ModelMetadata(
+        identifier="resize-lanczos",
+        display_name="Precision resize",
+        scale_factors=(1,),
+        supported_devices=("cpu",),
+        weights=(),
+        license="MIT",
+        source_url="https://pillow.readthedocs.io/",
+        description="Fast Lanczos downsize without generated detail",
+        supports_stream=True,
+    )
