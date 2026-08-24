@@ -21,6 +21,7 @@ from app.schemas.intelligence import (
     SubjectAppearance,
     SubjectIdentityRequest,
     TranscriptSegment,
+    TranscriptWord,
     VideoAnalysis,
 )
 from app.schemas.video import SourceType, VideoRecord
@@ -121,8 +122,8 @@ def test_subtitle_font_size_scales_with_displayed_text_and_refreshes_existing_vt
         transcript_segments=[
             TranscriptSegment(start=0, end=1, text="Short caption stays at the normal size."),
             TranscriptSegment(start=1, end=2, text="M" * 70),
-            TranscriptSegment(start=2, end=3, text="界" * 70),
-            TranscriptSegment(start=3, end=4, text="Long caption " * 14),
+            TranscriptSegment(start=2, end=3, text="M" * 130),
+            TranscriptSegment(start=3, end=13, text="Long caption " * 14),
         ],
     )
     database.save_analysis(analysis)
@@ -136,8 +137,59 @@ def test_subtitle_font_size_scales_with_displayed_text_and_refreshes_existing_vt
     assert "::cue(.caption-60) { font-size: 60%; }" in subtitles
     assert "Short caption stays at the normal size.\n" in subtitles
     assert "<c.caption-84>" in subtitles
-    assert "<c.caption-60>界" in subtitles
-    assert "<c.caption-60>Long caption" in subtitles
+    assert "<c.caption-60>MMMM" in subtitles
+    assert "00:00:03.000 --> 00:00:06.333" in subtitles
+    assert "00:00:06.333 --> 00:00:09.667" in subtitles
+    assert "00:00:09.667 --> 00:00:13.000" in subtitles
+    assert "00:00:03.000 --> 00:00:13.000" not in subtitles
+
+
+def test_subtitle_cues_follow_word_timestamps_without_overlap(tmp_path: Path):
+    settings = Settings(data_dir=tmp_path, pro_test_mode=True)
+    database = Database(tmp_path / "ohic.sqlite3")
+    manager = IntelligenceManager(settings, database, ProSetupService(settings, database))
+    words = [
+        TranscriptWord(text=f"word{index}", start=index, end=index + 1)
+        for index in range(10)
+    ]
+    segment = TranscriptSegment(
+        start=0,
+        end=10,
+        text=" ".join(word.text for word in words),
+        words=words,
+    )
+
+    cues = manager._subtitle_cues(segment)
+
+    assert len(cues) == 4
+    assert all(end - start <= 3.5 for start, end, _ in cues)
+    assert all(
+        current[1] <= following[0]
+        for current, following in zip(cues, cues[1:], strict=False)
+    )
+    assert " ".join(cue[2] for cue in cues) == segment.text
+
+
+def test_overlapping_transcript_segments_do_not_accumulate_on_screen(tmp_path: Path):
+    settings = Settings(data_dir=tmp_path, pro_test_mode=True)
+    database = Database(tmp_path / "ohic.sqlite3")
+    manager = IntelligenceManager(settings, database, ProSetupService(settings, database))
+    analysis = VideoAnalysis(
+        id="overlapping-subtitles",
+        video_id="video",
+        status=AnalysisStatus.READY,
+        transcript_segments=[
+            TranscriptSegment(start=0, end=4, text="The first caption finishes here"),
+            TranscriptSegment(start=3, end=6, text="The second caption starts next"),
+        ],
+    )
+    database.save_analysis(analysis)
+
+    subtitles = manager.subtitle_path(analysis.id).read_text(encoding="utf-8")
+
+    assert "00:00:02.000 --> 00:00:04.000" in subtitles
+    assert "00:00:04.000 --> 00:00:06.000" in subtitles
+    assert "00:00:03.000 --> 00:00:06.000" not in subtitles
 
 
 def test_pro_remains_absent_until_the_user_starts_setup(tmp_path: Path):
