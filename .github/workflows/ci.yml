@@ -38,3 +38,36 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm test
+
+  package-macos:
+    name: Versioned macOS DMG
+    needs: [backend, frontend]
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+          enable-cache: true
+      - name: Install system media tools
+        run: brew install ffmpeg dylibbundler
+      - run: npm ci
+      - name: Install backend runtime
+        working-directory: backend
+        run: uv sync --frozen --group dev
+      - name: Build versioned DMG
+        env:
+          OHIC_BUILD_VERSION: 0.1.0.${{ github.run_number }}-${{ github.sha }}
+        run: chmod +x scripts/build-dmg.sh && scripts/build-dmg.sh
+      - name: Smoke test mounted application
+        run: scripts/smoke-dmg.sh release/*.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OhIc-macos-0.1.0.${{ github.run_number }}-${{ github.sha }}
+          path: release/*.dmg
+          if-no-files-found: error
+          retention-days: 30

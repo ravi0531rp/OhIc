@@ -1,0 +1,37 @@
+#!/bin/bash
+set -euo pipefail
+
+RESOURCE_DIR="$(cd "$(dirname "$0")/../Resources" && pwd)"
+SUPPORT_DIR="$HOME/Library/Application Support/OhIc"
+LOG_DIR="$HOME/Library/Logs/OhIc"
+mkdir -p "$SUPPORT_DIR" "$LOG_DIR"
+
+export OHIC_DATA_DIR="$SUPPORT_DIR/data"
+export PYTHONHOME="$RESOURCE_DIR/python"
+export PYTHONPATH="$RESOURCE_DIR/backend:$RESOURCE_DIR/python-packages"
+export PATH="$RESOURCE_DIR/bin:$PATH"
+export DYLD_LIBRARY_PATH="$RESOURCE_DIR/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+export PORT=3000
+
+"$RESOURCE_DIR/python/bin/python3" "$RESOURCE_DIR/backend_entry.py" \
+  >>"$LOG_DIR/backend.log" 2>&1 &
+BACKEND_PID=$!
+"$RESOURCE_DIR/bin/node" "$RESOURCE_DIR/frontend/server.js" \
+  >>"$LOG_DIR/frontend.log" 2>&1 &
+FRONTEND_PID=$!
+
+cleanup() {
+  kill "$FRONTEND_PID" "$BACKEND_PID" 2>/dev/null || true
+  wait "$FRONTEND_PID" "$BACKEND_PID" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+for _attempt in {1..80}; do
+  if /usr/bin/curl --silent --fail http://127.0.0.1:3000 >/dev/null 2>&1; then
+    /usr/bin/open http://127.0.0.1:3000
+    break
+  fi
+  sleep 0.25
+done
+
+wait "$FRONTEND_PID"
