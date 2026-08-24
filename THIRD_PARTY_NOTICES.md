@@ -17,9 +17,14 @@ and model weights are also absent until the user explicitly starts its optional 
 | Lucide | Interface icons | ISC |
 | Qwen3-VL | Optional local video-language reasoning model | Apache-2.0 code/model card, [QwenLM/Qwen3-VL](https://github.com/QwenLM/Qwen3-VL) and the selected Hugging Face checkpoint |
 | Whisper / MLX Whisper / faster-whisper | Optional local speech transcription | MIT implementations and their selected model-card terms, [OpenAI Whisper](https://github.com/openai/whisper), [mlx-examples](https://github.com/ml-explore/mlx-examples), [SYSTRAN faster-whisper](https://github.com/SYSTRAN/faster-whisper) |
+| Tara | Optional Hindi/Hinglish code-switch transcription | Apache-2.0, [Trelis/tara](https://huggingface.co/Trelis/tara) |
+| RF-DETR Small | Optional COCO object detection | Apache-2.0, [roboflow/rf-detr](https://github.com/roboflow/rf-detr) |
+| ByteTrack / Supervision | Optional multi-object track association | MIT, [FoundationVision/ByteTrack](https://github.com/FoundationVision/ByteTrack) and [roboflow/supervision](https://github.com/roboflow/supervision) |
+| Sentence Transformers and CLIP | Local multilingual transcript and visual retrieval embeddings | Apache-2.0 framework and selected model-card terms, [UKPLab/sentence-transformers](https://github.com/UKPLab/sentence-transformers) |
 | MLX-VLM | Apple-silicon Qwen inference | MIT, [Blaizzy/mlx-vlm](https://github.com/Blaizzy/mlx-vlm) |
 | OpenCV | Optional local person detection and track association | Apache-2.0, [opencv/opencv](https://github.com/opencv/opencv) |
 | Hugging Face Hub | Resumable optional model downloads | Apache-2.0, [huggingface/huggingface_hub](https://github.com/huggingface/huggingface_hub) |
+| qrcode | Same-network phone pairing QR generation | MIT, [soldair/node-qrcode](https://github.com/soldair/node-qrcode) |
 
 Each dependency remains subject to its own license. Users distributing packaged builds should
 review the exact FFmpeg build and dependency versions they ship.

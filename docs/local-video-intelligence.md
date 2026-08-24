@@ -1,7 +1,7 @@
 # Local Video Intelligence workspace
 
-Status: product and architecture exploration  
-Branch: `feature/local-video-intelligence`
+Status: initial local implementation shipped; advanced correction and export workflows remain a roadmap
+Branch: `main`
 
 ## North star
 

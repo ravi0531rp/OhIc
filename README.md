@@ -1,10 +1,11 @@
 # OhIc (Oh-I-See 😉)
 
-**Restore, upscale, compare, and stream enhanced video.**
+**Restore, search, understand, and capture private video.**
 
-OhIc is a free, open-source video enhancement workspace. Import a file or permitted YouTube video,
-choose the enhancement engine, detail, and output size, preview the result, and restore and upscale
-it locally. Export a browser-friendly MP4 or an archival MKV that preserves every media track.
+OhIc is a free, open-source local video studio. Restore or downsize an import, inspect it with
+multilingual transcription and object tracking, ask evidence-grounded questions over transcript
+or visual embeddings, or pair a phone camera on the same Wi-Fi network. Video processing and AI
+inference stay on the computer.
 
 This README is for people using OhIc. If you are installing it for development, changing the
 code, integrating the API, or tuning its configuration, see the
@@ -29,6 +30,7 @@ code, integrating the API, or tuning its configuration, see the
   before processing.
 - Get a plain-language source diagnosis and apply its recommended enhancement recipe.
 - Choose an aspect-safe recommended output such as 720p, 1080p, 1440p, or 4K.
+- Reduce an oversized source to a smaller standard resolution with a non-generative Lanczos pass.
 - Choose fast frame-by-frame Real-ESRGAN or experimental, temporally aware RealBasicVSR for
   supported videos.
 - Pick **Fast**, **Balanced**, or **Maximum** quality.
@@ -52,10 +54,15 @@ code, integrating the API, or tuning its configuration, see the
 - Stop queued or running downloads, enhancements, local batches, and playlist batches.
 - Compare original and enhanced video with a draggable wipe or side-by-side view, synchronized
   playback, zoom, and frame stepping.
+- Pair a phone on the same Wi-Fi network with a one-time QR code and turn its camera stream into
+  an imported clip. Mobile browsers may require you to approve local-camera access or a trusted
+  local HTTPS origin.
 - Select and delete saved uploads, YouTube downloads, results, previews, and streaming parts from
   the Storage panel.
-- Optionally add **Pro Intelligence** for automatic local subtitles, multi-person tracking,
-  remembered user-assigned names, transcript search, and timestamp-grounded video chat.
+- Move the selected video between Restore and **Pro Intelligence** without importing it again.
+- Optionally add **Pro Intelligence** for multilingual Whisper or Hindi/Hinglish Tara subtitles,
+  RF-DETR Small detection with ByteTrack subject tracking, remembered user-assigned names,
+  separate transcript/video embedding search, and timestamp-grounded multimodal chat.
 
 ## Privacy and network use
 
@@ -66,14 +73,17 @@ file locations—not copies of your video bytes.
 Network access is used only when you ask OhIc to:
 
 - inspect or download a YouTube video or playlist; or
+- pair with a phone camera over the local network; or
 - download an official enhancement model the first time you select its engine; or
 - download the optional Pro Intelligence bundle after you explicitly choose **Download Pro**.
 
 Pro Intelligence is not part of the normal installation and downloads nothing in the background.
 On Apple silicon it uses an MLX-optimized Qwen3-VL 4B model and Whisper large-v3 turbo. Other
-supported systems use a smaller portable Qwen model and a local faster-whisper runtime. The bundle
-is stored inside OhIc's data directory and never uploads a video, transcript, identity, frame, or
-question to a model service.
+supported systems use a smaller portable Qwen model and a local faster-whisper runtime. Tara adds
+Hindi/Hinglish code-switch transcription; RF-DETR Small and ByteTrack add object detection and
+tracking; multilingual sentence and CLIP indexes power retrieval. The bundle is stored inside
+OhIc's data directory and never uploads a video, transcript, identity, frame, or question to a
+model service.
 
 Use YouTube features only for videos you own or are permitted to download and process.
 
@@ -86,8 +96,8 @@ Use YouTube features only for videos you own or are permitted to download and pr
 - FFmpeg, including FFprobe.
 - At least about 500 MB for application dependencies, plus roughly 67 MB for Real-ESRGAN or
   141 MB for the optional RealBasicVSR checkpoint.
-- If you enable Pro Intelligence, allow roughly 5.5 GB on Apple silicon or up to about 7.5 GB for
-  the portable runtime and models. More free memory improves video-chat response time.
+- If you enable Pro Intelligence, allow roughly 10.5 GB on Apple silicon or 12.5 GB for the
+  portable runtime and models. More free memory improves video-chat response time.
 - Enough free disk space for the imported source, temporary processing data, streaming parts, and
   final result. Long or high-resolution videos can require several times the source file size.
 
@@ -238,16 +248,25 @@ resumed.
 After setup:
 
 1. Open an imported video and choose **Pro**, then **Analyze this video**.
-2. OhIc creates word-timed captions with Whisper, detects and follows multiple people, and stores
-   visual anchors for local Qwen reasoning. The original video is never modified.
+2. Choose multilingual Whisper or Tara for Hindi/Hinglish code-switching, select a language hint,
+   and decide whether to track people, common objects, or both. RF-DETR Small detects subjects and
+   ByteTrack follows them through the clip. The original video is never modified.
 3. Turn captions on in the player, search the transcript, or choose any timestamp to seek there.
 4. Open **Subjects** to see appearance windows. Give a person a name or link the track to a name
    you assigned earlier. OhIc remembers that label in its local identity vault; it does not guess
    real-world identity or run cloud face recognition.
-5. Open **Ask** and ask about speech, people, visible moments, or the current playhead. OhIc runs a
-   fixed set of read-only tools over metadata, transcript segments, tracked appearances, and local
-   keyframes before Qwen writes the answer. Answers include clickable evidence timestamps, and the
+5. Open **Ask**, choose Transcript, Video, or both retrieval indexes, and ask about speech, people,
+   objects, visible moments, or the current playhead. OhIc runs read-only retrieval tools over
+   multilingual transcript embeddings, CLIP video-frame embeddings, tracked appearances, and
+   metadata before Qwen writes the answer. Answers include clickable evidence timestamps, and the
    interface shows which local tools were used.
+
+## macOS disk image
+
+Every successful backend and frontend CI run builds a versioned `OhIc-*.dmg` on macOS, mounts and
+smoke-tests its bundled Python, Node, FFmpeg, and `uv` runtimes, then uploads the disk image to the
+GitHub Actions run for 30 days. Local macOS builds use `scripts/build-dmg.sh`; the generated
+`release/` directory is intentionally ignored by Git.
 
 Analyses, identity labels, and chats persist when you change sessions or restart OhIc. Open Pro
 without a selected source to see the persistent analysis library. **Release AI memory** unloads
