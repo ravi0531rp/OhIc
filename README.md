@@ -1,5 +1,7 @@
 # OhIc (Oh-I-See 😉)
 
+[**Visit the OhIc website**](https://ravi0531rp.github.io/OhIc/) · See what it can do, how privacy works, and how to get started.
+
 [**Download the native macOS app · Apple silicon · macOS 13+**](https://github.com/ravi0531rp/OhIc/releases/download/native-macos-preview/OhIc-macOS-Apple-Silicon.dmg)
 
 _Rolling test build produced only after CI and mounted-app smoke tests pass. Because this preview is
