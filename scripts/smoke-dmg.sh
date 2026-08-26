@@ -5,16 +5,16 @@ DMG_PATH="${1:?Usage: scripts/smoke-dmg.sh path/to/OhIc.dmg}"
 MOUNT_DIR="$(mktemp -d "${TMPDIR%/}/ohic-mount.XXXXXX")"
 SMOKE_DIR="$(mktemp -d "${TMPDIR%/}/ohic-smoke.XXXXXX")"
 FRONTEND_PID=""
-LAUNCHER_PID=""
+APPLICATION_PID=""
 
 cleanup() {
   if [[ -n "$FRONTEND_PID" ]]; then
     kill "$FRONTEND_PID" 2>/dev/null || true
     wait "$FRONTEND_PID" 2>/dev/null || true
   fi
-  if [[ -n "$LAUNCHER_PID" ]]; then
-    kill "$LAUNCHER_PID" 2>/dev/null || true
-    wait "$LAUNCHER_PID" 2>/dev/null || true
+  if [[ -n "$APPLICATION_PID" ]]; then
+    kill "$APPLICATION_PID" 2>/dev/null || true
+    wait "$APPLICATION_PID" 2>/dev/null || true
   fi
   hdiutil detach "$MOUNT_DIR" >/dev/null 2>&1 || true
   if ! mount | grep -Fq " on $MOUNT_DIR ("; then
@@ -68,27 +68,44 @@ kill "$FRONTEND_PID" 2>/dev/null || true
 wait "$FRONTEND_PID" 2>/dev/null || true
 FRONTEND_PID=""
 
-HOME="$SMOKE_DIR/home" OHIC_SKIP_OPEN=1 "$APP_DIR/Contents/MacOS/OhIc" &
-LAUNCHER_PID=$!
-LAUNCHER_OK=0
+mkdir -p "$SMOKE_DIR/home"
+file "$APP_DIR/Contents/MacOS/OhIc" | grep -Fq "Mach-O"
+HOME="$SMOKE_DIR/home" OHIC_SMOKE_TEST=1 "$APP_DIR/Contents/MacOS/OhIc" \
+  >"$SMOKE_DIR/native-host.log" 2>&1 &
+APPLICATION_PID=$!
+APPLICATION_OK=0
 for _attempt in {1..120}; do
   if curl --silent --fail http://127.0.0.1:8000/api/health >/dev/null \
-    && curl --silent --fail http://127.0.0.1:3000/ >/dev/null; then
-    LAUNCHER_OK=1
+    && curl --silent --fail http://127.0.0.1:3000/ >/dev/null \
+    && grep -Fq "native-host-ready" "$SMOKE_DIR/native-host.log"; then
+    APPLICATION_OK=1
     break
   fi
-  if ! kill -0 "$LAUNCHER_PID" 2>/dev/null; then
+  if ! kill -0 "$APPLICATION_PID" 2>/dev/null; then
     break
   fi
   sleep 0.5
 done
-if [[ "$LAUNCHER_OK" -ne 1 ]]; then
+if [[ "$APPLICATION_OK" -ne 1 ]]; then
+  cat "$SMOKE_DIR/native-host.log" 2>/dev/null || true
   cat "$SMOKE_DIR/home/Library/Logs/OhIc/backend.log" 2>/dev/null || true
   cat "$SMOKE_DIR/home/Library/Logs/OhIc/frontend.log" 2>/dev/null || true
   exit 1
 fi
-echo "application-launcher-ok"
-kill "$LAUNCHER_PID" 2>/dev/null || true
-wait "$LAUNCHER_PID" 2>/dev/null || true
-LAUNCHER_PID=""
+echo "native-application-runtime-ok"
+kill "$APPLICATION_PID" 2>/dev/null || true
+wait "$APPLICATION_PID" 2>/dev/null || true
+APPLICATION_PID=""
+for _attempt in {1..20}; do
+  if ! curl --silent --fail --max-time 0.25 http://127.0.0.1:8000/api/health >/dev/null 2>&1 \
+    && ! curl --silent --fail --max-time 0.25 http://127.0.0.1:3000/ >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.25
+done
+if curl --silent --fail --max-time 0.25 http://127.0.0.1:8000/api/health >/dev/null 2>&1 \
+  || curl --silent --fail --max-time 0.25 http://127.0.0.1:3000/ >/dev/null 2>&1; then
+  echo "Native application left local services running after termination." >&2
+  exit 1
+fi
 codesign --verify --deep --strict "$APP_DIR"

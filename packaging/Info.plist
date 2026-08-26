@@ -3,6 +3,7 @@
 <plist version="1.0"><dict>
   <key>CFBundleDisplayName</key><string>OhIc</string>
   <key>CFBundleExecutable</key><string>OhIc</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleIdentifier</key><string>com.ohic.video</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>OhIc</string>
@@ -10,5 +11,8 @@
   <key>CFBundleShortVersionString</key><string>0.1.1</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.video</string>
+  <key>NSCameraUsageDescription</key><string>OhIc can use a camera as a source for live video intelligence and enhancement.</string>
+  <key>NSMicrophoneUsageDescription</key><string>OhIc can use microphone audio when capturing live video.</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>

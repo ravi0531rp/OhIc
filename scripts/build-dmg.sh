@@ -34,11 +34,27 @@ FFPROBE_BIN="$(command -v ffprobe)"
 UV_BIN="$(command -v uv)"
 
 mkdir -p "$APP_DIR/Contents/MacOS" "$RESOURCE_DIR/bin" "$RESOURCE_DIR/lib" "$WORK_DIR/image" "$RELEASE_DIR"
-cp "$PROJECT_DIR/packaging/OhIc" "$APP_DIR/Contents/MacOS/OhIc"
-chmod +x "$APP_DIR/Contents/MacOS/OhIc"
+xcrun swiftc -swift-version 5 -O \
+  -target "$(uname -m)-apple-macos13.0" \
+  -framework AppKit -framework WebKit \
+  "$PROJECT_DIR/packaging/OhIcApp.swift" \
+  -o "$APP_DIR/Contents/MacOS/OhIc"
 cp "$PROJECT_DIR/packaging/Info.plist" "$APP_DIR/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP_DIR/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${GITHUB_RUN_NUMBER:-1}" "$APP_DIR/Contents/Info.plist"
+
+ICON_PNG="$WORK_DIR/AppIcon-1024.png"
+ICONSET_DIR="$WORK_DIR/AppIcon.iconset"
+xcrun swift "$PROJECT_DIR/packaging/generate_app_icon.swift" "$ICON_PNG"
+mkdir -p "$ICONSET_DIR"
+for ICON_SIZE in 16 32 128 256 512; do
+  sips -z "$ICON_SIZE" "$ICON_SIZE" "$ICON_PNG" \
+    --out "$ICONSET_DIR/icon_${ICON_SIZE}x${ICON_SIZE}.png" >/dev/null
+  DOUBLE_SIZE=$((ICON_SIZE * 2))
+  sips -z "$DOUBLE_SIZE" "$DOUBLE_SIZE" "$ICON_PNG" \
+    --out "$ICONSET_DIR/icon_${ICON_SIZE}x${ICON_SIZE}@2x.png" >/dev/null
+done
+iconutil -c icns "$ICONSET_DIR" -o "$RESOURCE_DIR/AppIcon.icns"
 
 cp -R "$PROJECT_DIR/dist/standalone" "$RESOURCE_DIR/frontend"
 # vinext's standalone tracer currently omits these peer runtime packages and

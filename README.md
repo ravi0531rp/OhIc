@@ -1,5 +1,10 @@
 # OhIc (Oh-I-See 😉)
 
+[**Download the native macOS app · Apple silicon · macOS 13+**](https://github.com/ravi0531rp/OhIc/releases/download/native-macos-preview/OhIc-macOS-Apple-Silicon.dmg)
+
+_Rolling test build produced only after CI and mounted-app smoke tests pass. Because this preview is
+not yet Apple-notarized, Control-click **OhIc** in Applications and choose **Open** on first launch._
+
 **Restore, search, understand, and capture private video.**
 
 OhIc is a free, open-source local video studio. Restore or downsize an import, inspect it with
@@ -272,8 +277,14 @@ resumed.
 
 Every successful backend and frontend CI run builds a versioned `OhIc-*.dmg` on macOS, mounts and
 smoke-tests its bundled Python, Node, FFmpeg, and `uv` runtimes, then uploads the disk image to the
-GitHub Actions run for 30 days. Local macOS builds use `scripts/build-dmg.sh`; the generated
-`release/` directory is intentionally ignored by Git.
+GitHub Actions run for 30 days. Successful pushes to the native-app branch or `main` also replace
+the rolling `native-macos-preview` prerelease asset linked at the top of this README. Local macOS
+builds use `scripts/build-dmg.sh`; the generated `release/` directory is intentionally ignored by Git.
+
+The disk image contains a native macOS application. Drag **OhIc** to **Applications** and open it
+like any other app; its existing interface runs inside an OhIc window rather than opening a browser.
+The app starts and stops its private local services with the window, while file selection,
+downloads, confirmation prompts, and keyboard shortcuts use standard macOS controls.
 
 Analyses, identity labels, and chats persist when you change sessions or restart OhIc. Open Pro
 without a selected source to see the persistent analysis library. **Release AI memory** unloads
