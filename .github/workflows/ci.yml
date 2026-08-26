@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: read
+
 on:
   push:
   pull_request:
@@ -43,6 +46,8 @@ jobs:
     name: Versioned macOS DMG
     needs: [backend, frontend]
     runs-on: macos-14
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -71,3 +76,33 @@ jobs:
           path: release/*.dmg
           if-no-files-found: error
           retention-days: 30
+      - name: Prepare public macOS test build
+        if: >-
+          github.event_name == 'push' &&
+          (github.ref == 'refs/heads/main' ||
+          github.ref == 'refs/heads/codex/feature-native-macos-app')
+        run: cp release/*.dmg release/OhIc-macOS-Apple-Silicon.dmg
+      - name: Publish rolling macOS test release
+        if: >-
+          github.event_name == 'push' &&
+          (github.ref == 'refs/heads/main' ||
+          github.ref == 'refs/heads/codex/feature-native-macos-app')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: native-macos-preview
+          RELEASE_ASSET: release/OhIc-macOS-Apple-Silicon.dmg
+        run: |
+          git tag --force "$RELEASE_TAG" "$GITHUB_SHA"
+          git push --force origin "refs/tags/$RELEASE_TAG"
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$RELEASE_ASSET" --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$RELEASE_TAG" --target "$GITHUB_SHA" --prerelease \
+              --title "OhIc native macOS preview" \
+              --notes "Rolling Apple silicon test build. Built and smoke-tested by CI from $GITHUB_SHA." \
+              --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$RELEASE_TAG" "$RELEASE_ASSET" --target "$GITHUB_SHA" --prerelease \
+              --title "OhIc native macOS preview" \
+              --notes "Rolling Apple silicon test build. Built and smoke-tested by CI from $GITHUB_SHA." \
+              --repo "$GITHUB_REPOSITORY"
+          fi
