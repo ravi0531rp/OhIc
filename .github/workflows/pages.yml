@@ -1,0 +1,53 @@
+name: Deploy OhIc website
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/pages.yml"
+      - "website/**"
+      - "public/UI1.png"
+      - "public/UI2.png"
+      - "public/og.png"
+      - "public/sequence/pro-ai-workflow.gif"
+      - "scripts/build-website.sh"
+      - "tests/website.test.mjs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out OhIc
+        uses: actions/checkout@v6
+      - name: Build the website
+        run: chmod +x scripts/build-website.sh && scripts/build-website.sh
+      - name: Validate pages and links
+        run: node --test tests/website.test.mjs
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Upload website
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Publish website
+        id: deployment
+        uses: actions/deploy-pages@v4

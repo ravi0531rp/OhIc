@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://ravi0531rp.github.io/OhIc/sitemap.xml
