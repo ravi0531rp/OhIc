@@ -275,6 +275,11 @@ smoke-tests its bundled Python, Node, FFmpeg, and `uv` runtimes, then uploads th
 GitHub Actions run for 30 days. Local macOS builds use `scripts/build-dmg.sh`; the generated
 `release/` directory is intentionally ignored by Git.
 
+The disk image contains a native macOS application. Drag **OhIc** to **Applications** and open it
+like any other app; its existing interface runs inside an OhIc window rather than opening a browser.
+The app starts and stops its private local services with the window, while file selection,
+downloads, confirmation prompts, and keyboard shortcuts use standard macOS controls.
+
 Analyses, identity labels, and chats persist when you change sessions or restart OhIc. Open Pro
 without a selected source to see the persistent analysis library. **Release AI memory** unloads
 Qwen from working memory without removing its downloaded files or saved analysis.
