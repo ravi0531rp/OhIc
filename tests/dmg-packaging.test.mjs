@@ -10,7 +10,7 @@ test("macOS artifact waits for both quality gates and is smoke-tested", async ()
     read("README.md"),
   ]);
 
-  assert.match(workflow, /package-macos:[\s\S]*permissions:\n      contents: write/);
+  assert.match(workflow, /package-macos:[\s\S]*permissions:\n {6}contents: write/);
   assert.match(workflow, /needs: \[backend, frontend\]/);
   assert.match(workflow, /scripts\/smoke-dmg\.sh release\/\*\.dmg/);
   assert.match(workflow, /actions\/upload-artifact@v4/);
