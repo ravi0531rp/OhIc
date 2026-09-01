@@ -46,6 +46,8 @@ jobs:
     name: Versioned macOS DMG
     needs: [backend, frontend]
     runs-on: macos-14
+    env:
+      UV_PYTHON_PREFERENCE: only-managed
     permissions:
       contents: write
     steps:
@@ -56,14 +58,16 @@ jobs:
           cache: npm
       - uses: astral-sh/setup-uv@v6
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           enable-cache: true
+      - name: Install relocatable Python
+        run: uv python install 3.12
       - name: Install system media tools
         run: brew install ffmpeg dylibbundler
       - run: npm ci
       - name: Install backend runtime
         working-directory: backend
-        run: uv sync --frozen --group dev
+        run: uv sync --frozen --no-dev --python 3.12
       - name: Build versioned DMG
         env:
           OHIC_BUILD_VERSION: 0.1.1.${{ github.run_number }}-${{ github.sha }}
