@@ -252,7 +252,17 @@ class ProSetupService:
             )
         uv = shutil.which("uv")
         command = (
-            [uv, "pip", "install", "--target", str(self.runtime_dir), "--upgrade", *packages]
+            [
+                uv,
+                "pip",
+                "install",
+                "--python",
+                sys.executable,
+                "--target",
+                str(self.runtime_dir),
+                "--upgrade",
+                *packages,
+            ]
             if uv
             else [
                 sys.executable,

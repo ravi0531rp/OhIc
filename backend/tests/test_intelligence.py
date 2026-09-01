@@ -219,6 +219,38 @@ def test_optional_runtime_uses_writable_application_data(tmp_path: Path):
     ]
 
 
+def test_optional_runtime_installs_for_the_bundled_interpreter(
+    tmp_path: Path, monkeypatch
+):
+    settings = Settings(data_dir=tmp_path)
+    database = Database(tmp_path / "ohic.sqlite3")
+    setup = ProSetupService(settings, database)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr("app.services.pro.shutil.which", lambda command: "/app/bin/uv")
+
+    def run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("app.services.pro.subprocess.run", run)
+
+    setup._install_packages()
+
+    command = captured["command"]
+    assert isinstance(command, list)
+    assert command[:6] == [
+        "/app/bin/uv",
+        "pip",
+        "install",
+        "--python",
+        sys.executable,
+        "--target",
+    ]
+    assert command[6] == str(setup.runtime_dir)
+
+
 def test_ready_status_reports_repair_without_losing_existing_models(tmp_path: Path):
     settings = Settings(data_dir=tmp_path)
     database = Database(tmp_path / "ohic.sqlite3")
