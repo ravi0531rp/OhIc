@@ -100,6 +100,7 @@ ln -s /Applications "$WORK_DIR/image/Applications"
 
 find "$APP_DIR" -name '__pycache__' -type d -prune -exec rm -rf {} +
 xattr -cr "$APP_DIR" 2>/dev/null || true
+"$PROJECT_DIR/scripts/audit-macos-app.sh" "$APP_DIR"
 codesign --force --deep --sign - "$APP_DIR"
 DMG_PATH="$RELEASE_DIR/OhIc-$SAFE_VERSION.dmg"
 rm -f "$DMG_PATH"

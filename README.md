@@ -119,11 +119,13 @@ Use YouTube features only for videos you own or are permitted to download and pr
 
 ## Requirements
 
-- macOS 13 or newer and Linux are supported.
+- The native DMG supports Apple silicon Macs on macOS 13 or newer. It includes Python, Node.js,
+  FFmpeg, FFprobe, uv, and every core application library; Homebrew and developer tools are not
+  required on the destination Mac.
+- Source installations support macOS 13 or newer and Linux.
 - OhIc uses MPS or CUDA acceleration when available and falls back to CPU processing.
-- Python 3.11 or 3.12, managed through [uv](https://docs.astral.sh/uv/).
-- Node.js 22.13 or newer.
-- FFmpeg, including FFprobe.
+- Building from source requires Python 3.11 or 3.12 managed through
+  [uv](https://docs.astral.sh/uv/), Node.js 22.13 or newer, and FFmpeg including FFprobe.
 - At least about 500 MB for application dependencies, plus roughly 67 MB for Real-ESRGAN or
   141 MB for the optional RealBasicVSR checkpoint.
 - If you enable Pro Intelligence, allow roughly 10.5 GB on Apple silicon or 12.5 GB for the
